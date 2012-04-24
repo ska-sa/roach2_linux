@@ -90,16 +90,6 @@ config RAINIER
 	help
 	  This option enables support for the AMCC PPC440GRX evaluation board.
 
-config ROACH2
-        bool "ROACH2"
-        depends on 44x
-        default n
-        select PPC44x_GPIO
-        select 440EPX
-        help
-          This option enables support for the ROACH-2 board.
-
-
 config WARP
 	bool "PIKA Warp"
 	depends on 44x
@@ -196,6 +186,15 @@ config ISS4xx
 	select OF_RTC
 	help
 	  This option enables support for the IBM ISS simulation environment
+
+config ROACH2
+        bool "ROACH2"
+        depends on 44x
+        default n
+        select PPC44x_GPIO
+        select 440EPX
+        help
+          This option enables support for the ROACH-2 board.
 
 config CURRITUCK
 	bool "IBM Currituck (476fpe) Support"

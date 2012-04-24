@@ -18,8 +18,8 @@
 / {
   #address-cells = <2>;
   #size-cells = <1>;
-  model = "amcc,sequoia";
-  compatible = "amcc,sequoia";
+  model = "kat,roach2";
+  compatible = "kat,roach2";
   dcr-parent = <&{/cpus/cpu@0}>;
 
   aliases {
@@ -299,35 +299,46 @@
 	reg = <0xc0100000 0x00200000>;
        };
 
-      GPIO1: gpio@ef600b00 {
+      GPIO0: gpio@ef600b00 {
 	compatible = "ibm,ppc4xx-gpio";
 	reg = <0xef600b00 0x00000048>;
 	#gpio-cells = <2>;
 	gpio-controller;
       };
 
+      GPIO1: gpio@ef600c00 {
+	compatible = "ibm,ppc4xx-gpio";
+	reg = <0xef600c00 0x00000048>;
+	#gpio-cells = <2>;
+	gpio-controller;
+      };
+
       gpio-pins {
-              compatible = "gpio-pins";
-               init_n {
-                       gpios = <&GPIO1 12 0>;
-                       default-state = "keep";
-               };
-               done {
-                       gpios = <&GPIO1 13 0>;
-                       default-state = "keep";
-               };
-               prog_n {
-                       gpios = <&GPIO1 14 0>;
-                       default-state = "keep";
-               };
-               rdwr_n {
-                       gpios = <&GPIO1 15 0>;
-                       default-state = "keep";
-               };
-               fault_n {
-                       gpios = <&GPIO1 41 0>;
-                       default-state = "keep";
-               };
+	       compatible = "gpio-pins";
+	       init_n {
+			gpios = <&GPIO0 12 0>;
+			default-state = "keep";
+	       };
+	       done {
+			gpios = <&GPIO0 13 0>;
+			default-state = "keep";
+	       };
+	       prog_n {
+			gpios = <&GPIO0 14 0>;
+			default-state = "keep";
+	       };
+	       rdwr_n {
+			gpios = <&GPIO0 15 0>;
+			default-state = "keep";
+	       };
+	       fault_n {
+			gpios = <&GPIO0 41 0>;
+			default-state = "keep";
+	       };
+	       powerdown {
+			gpios = <&GPIO0 22 0>;
+			default-state = "keep";
+	       };
       };
 
       ZMII0: emac-zmii@ef600d00 {
