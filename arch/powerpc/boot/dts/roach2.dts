@@ -1,0 +1,379 @@
+/*
+ * Device Tree Source for SKA/KAT ROACH-2
+ *
+ * Based on Sequoia code by ???
+ * Based on Bamboo code by Josh Boyer <jwboyer@linux.vnet.ibm.com>
+ * Copyright (c) 2006, 2007 IBM Corp.
+ *
+ * FIXME: Draft only!
+ *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2.  This program is licensed "as is" without
+ * any warranty of any kind, whether express or implied.
+ *
+ */
+
+/dts-v1/;
+
+/ {
+  #address-cells = <2>;
+  #size-cells = <1>;
+  model = "amcc,sequoia";
+  compatible = "amcc,sequoia";
+  dcr-parent = <&{/cpus/cpu@0}>;
+
+  aliases {
+    ethernet0 = &EMAC0;
+    serial0 = &UART0;
+    serial1 = &UART1;
+  };
+
+  cpus {
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    cpu@0 {
+      device_type = "cpu";
+      model = "PowerPC,440EPx";
+      reg = <0x00000000>;
+      clock-frequency = <0>; /* Filled in by zImage */
+      timebase-frequency = <0>; /* Filled in by zImage */
+      i-cache-line-size = <32>;
+      d-cache-line-size = <32>;
+      i-cache-size = <32768>;
+      d-cache-size = <32768>;
+      dcr-controller;
+      dcr-access-method = "native";
+    };
+  };
+
+  memory {
+    device_type = "memory";
+    reg = <0x00000000 0x00000000 0x00000000>; /* Filled in by zImage */
+  };
+
+  UIC0: interrupt-controller0 {
+    compatible = "ibm,uic-440epx","ibm,uic";
+    interrupt-controller;
+    cell-index = <0>;
+    dcr-reg = <0x0c0 0x009>;
+    #address-cells = <0>;
+    #size-cells = <0>;
+    #interrupt-cells = <2>;
+  };
+
+  UIC1: interrupt-controller1 {
+    compatible = "ibm,uic-440epx","ibm,uic";
+    interrupt-controller;
+    cell-index = <1>;
+    dcr-reg = <0x0d0 0x009>;
+    #address-cells = <0>;
+    #size-cells = <0>;
+    #interrupt-cells = <2>;
+    interrupts = <0x1e 0x4 0x1f 0x4>; /* cascade */
+    interrupt-parent = <&UIC0>;
+  };
+
+  UIC2: interrupt-controller2 {
+    compatible = "ibm,uic-440epx","ibm,uic";
+    interrupt-controller;
+    cell-index = <2>;
+    dcr-reg = <0x0e0 0x009>;
+    #address-cells = <0>;
+    #size-cells = <0>;
+    #interrupt-cells = <2>;
+    interrupts = <0x1c 0x4 0x1d 0x4>; /* cascade */
+    interrupt-parent = <&UIC0>;
+  };
+
+  SDR0: sdr {
+    compatible = "ibm,sdr-440epx", "ibm,sdr-440ep";
+    dcr-reg = <0x00e 0x002>;
+  };
+
+  CPR0: cpr {
+    compatible = "ibm,cpr-440epx", "ibm,cpr-440ep";
+    dcr-reg = <0x00c 0x002>;
+  };
+
+  plb {
+    compatible = "ibm,plb-440epx", "ibm,plb4";
+    #address-cells = <2>;
+    #size-cells = <1>;
+    ranges;
+    clock-frequency = <0>; /* Filled in by zImage */
+
+    SDRAM0: sdram {
+      compatible = "ibm,sdram-440epx", "ibm,sdram-44x-ddr2denali";
+      dcr-reg = <0x010 0x002>;
+    };
+
+    DMA0: dma {
+      compatible = "ibm,dma-440epx", "ibm,dma-4xx";
+      dcr-reg = <0x100 0x027>;
+    };
+
+    MAL0: mcmal {
+      compatible = "ibm,mcmal-440epx", "ibm,mcmal2";
+      dcr-reg = <0x180 0x062>;
+      num-tx-chans = <2>;
+      num-rx-chans = <2>;
+      interrupt-parent = <&MAL0>;
+      interrupts = <0x0 0x1 0x2 0x3 0x4>;
+      #interrupt-cells = <1>;
+      #address-cells = <0>;
+      #size-cells = <0>;
+      interrupt-map = </*TXEOB*/ 0x0 &UIC0 0xa 0x4
+          /*RXEOB*/ 0x1 &UIC0 0xb 0x4
+          /*SERR*/  0x2 &UIC1 0x0 0x4
+          /*TXDE*/  0x3 &UIC1 0x1 0x4
+          /*RXDE*/  0x4 &UIC1 0x2 0x4>;
+      interrupt-map-mask = <0xffffffff>;
+    };
+
+    USB0: ehci@e0000300 {
+      compatible = "ibm,usb-ehci-440epx", "usb-ehci";
+      interrupt-parent = <&UIC0>;
+      interrupts = <0x1a 0x4>;
+      reg = <0x00000000 0xe0000300 0x00000090 0x00000000 0xe0000390 0x00000070>;
+      big-endian;
+    };
+
+    POB0: opb {
+        compatible = "ibm,opb-440epx", "ibm,opb";
+      #address-cells = <1>;
+      #size-cells = <1>;
+        ranges = <0x00000000 0x00000001 0x00000000 0x80000000
+                0x80000000 0x00000001 0x80000000 0x80000000>;
+        interrupt-parent = <&UIC1>;
+        interrupts = <0x7 0x4>;
+        clock-frequency = <0>; /* Filled in by zImage */
+
+      EBC0: ebc {
+        compatible = "ibm,ebc-440epx", "ibm,ebc";
+        dcr-reg = <0x012 0x002>;
+        #address-cells = <2>;
+        #size-cells = <1>;
+        clock-frequency = <0>; /* Filled in by zImage */
+        interrupts = <0x5 0x1>;
+        interrupt-parent = <&UIC1>;
+
+        rmmc@0,0 {
+          compatible = "kat,rmmc";
+          interrupt-parent = <&UIC0>;
+          interrupts = <0x1b 0x8>;
+        };
+
+        nor_flash@0,0 {
+          compatible = "amd,s29gl256n", "cfi-flash";
+          bank-width = <2>;
+          reg = <0x00000000 0x00000000 0x08000000>;
+          #address-cells = <1>;
+          #size-cells = <1>;
+          partition@0 {
+            label = "kernel";
+            reg = <0x00000000 0x00400000>;
+          };
+          partition@400000 {
+            label = "rootfs";
+            reg = <0x00400000 0x04000000>;
+          };
+          partition@4400000 {
+            label = "userfs";
+            reg = <0x04400000 0x03000000>;
+          };
+          partition@7400000 {
+            label = "v6bitstream";
+            reg = <0x07400000 0x00b00000>;
+          };
+          partition@7f40000 {
+            label = "ubootenv";
+            reg = <0x07f40000 0x00040000>;
+          };
+          partition@7f80000 {
+            label = "uboot";
+            reg = <0x07f80000 0x00080000>;
+          };
+        };
+      };
+
+      UART0: serial@ef600300 {
+           device_type = "serial";
+           compatible = "ns16550";
+           reg = <0xef600300 0x00000008>;
+           virtual-reg = <0xef600300>;
+           clock-frequency = <0>; /* Filled in by zImage */
+           current-speed = <115200>;
+           interrupt-parent = <&UIC0>;
+           interrupts = <0x0 0x4>;
+         };
+
+      UART1: serial@ef600400 {
+         device_type = "serial";
+         compatible = "ns16550";
+         reg = <0xef600400 0x00000008>;
+         virtual-reg = <0xef600400>;
+         clock-frequency = <0>;
+         current-speed = <0>;
+         interrupt-parent = <&UIC0>;
+         interrupts = <0x1 0x4>;
+      };
+
+      IIC0: i2c@ef600700 {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        compatible = "ibm,iic-440epx", "ibm,iic";
+        reg = <0xef600700 0x00000014>;
+        interrupt-parent = <&UIC0>;
+        interrupts = <0x2 0x4>;
+
+        hwmon@4c {
+          compatible = "adi,ad7414";
+          reg = <0x4c>;
+        };
+
+        hwmon@4e {
+          compatible = "adi,ad7414";
+          reg = <0x4e>;
+        };
+
+        rtc@68 {
+          compatible = "dallas,ds1307";
+          reg = <0x68>;
+        };
+
+        hwmon@18 {
+          compatible = "maxim,max1668";
+          reg = <0x18>;
+        };
+
+        hwmon@48 {
+          compatible = "maxim,max6650";
+          reg = <0x48>;
+        };
+
+        hwmon@4b {
+          compatible = "maxim,max6650";
+          reg = <0x4b>;
+        };
+
+        hwmon@1b {
+          compatible = "maxim,max6650";
+          reg = <0x1b>;
+        };
+
+        hwmon@1f {
+          compatible = "maxim,max6650";
+          reg = <0x1f>;
+        };
+
+        hwmon@50 {
+          compatible = "maxim,max16071";
+          reg = <0x50>;
+        };
+
+        hwmon@51 {
+          compatible = "maxim,max16071";
+          reg = <0x51>;
+        };
+      };
+
+      IIC1: i2c@ef600800 {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        compatible = "ibm,iic-440epx", "ibm,iic";
+        reg = <0xef600800 0x00000014>;
+        interrupt-parent = <&UIC0>;
+        interrupts = <0x7 0x4>;
+      };
+
+      V5FPGA: fpga@d0000000{
+        device_type = "fpga";
+        xlnx,family = "virtex5";
+        compatible = "kat,roach2-fpga";
+        reg = <0xd0000000 0x4000000>;
+      };
+
+      SMAP:  smap@c0100000{
+	compatible = "smap";
+	reg = <0xc0100000 0x00200000>;
+       };
+
+      GPIO1: gpio@ef600b00 {
+	compatible = "ibm,ppc4xx-gpio";
+	reg = <0xef600b00 0x00000048>;
+	#gpio-cells = <2>;
+	gpio-controller;
+      };
+
+      gpio-pins {
+              compatible = "gpio-pins";
+               init_n {
+                       gpios = <&GPIO1 12 0>;
+                       default-state = "keep";
+               };
+               done {
+                       gpios = <&GPIO1 13 0>;
+                       default-state = "keep";
+               };
+               prog_n {
+                       gpios = <&GPIO1 14 0>;
+                       default-state = "keep";
+               };
+               rdwr_n {
+                       gpios = <&GPIO1 15 0>;
+                       default-state = "keep";
+               };
+               fault_n {
+                       gpios = <&GPIO1 41 0>;
+                       default-state = "keep";
+               };
+      };
+
+      ZMII0: emac-zmii@ef600d00 {
+        compatible = "ibm,zmii-440epx", "ibm,zmii";
+        reg = <0xef600d00 0x0000000c>;
+      };
+
+      RGMII0: emac-rgmii@ef601000 {
+        compatible = "ibm,rgmii-440epx", "ibm,rgmii";
+        reg = <0xef601000 0x00000008>;
+        has-mdio;
+      };
+
+      EMAC0: ethernet@ef600e00 {
+        device_type = "network";
+        compatible = "ibm,emac-440epx", "ibm,emac4";
+        interrupt-parent = <&EMAC0>;
+        interrupts = <0x0 0x1>;
+        #interrupt-cells = <1>;
+        #address-cells = <0>;
+        #size-cells = <0>;
+        interrupt-map = </*Status*/ 0x0 &UIC0 0x18 0x4
+            /*Wake*/  0x1 &UIC1 0x1d 0x4>;
+        reg = <0xef600e00 0x00000074>;
+        local-mac-address = [000000000000];
+        mal-device = <&MAL0>;
+        mal-tx-channel = <0>;
+        mal-rx-channel = <0>;
+        cell-index = <0>;
+        max-frame-size = <9000>;
+        rx-fifo-size = <4096>;
+        tx-fifo-size = <2048>;
+        phy-mode = "rgmii";
+        phy-map = <0x00000001>;
+        zmii-device = <&ZMII0>;
+        zmii-channel = <0>;
+        rgmii-device = <&RGMII0>;
+        rgmii-channel = <0>;
+        has-inverted-stacr-oc;
+        has-new-stacr-staopc;
+      };
+    };
+  };
+
+  chosen {
+    linux,stdout-path = "/plb/opb/serial@ef600300";
+    bootargs = "console=ttyS0,115200";
+  };
+};
