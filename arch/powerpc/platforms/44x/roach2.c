@@ -30,7 +30,7 @@ static __initdata struct of_device_id roach2_of_bus[] = {
 	{},
 };
 
-static int __init roach_device_probe(void)
+static int __init roach2_device_probe(void)
 {
 	of_platform_bus_probe(NULL, roach2_of_bus, NULL);
 
@@ -67,7 +67,6 @@ static void roach2_power_off(void)
                 if (strcmp(child->name, "powerdown") == 0)
                         pin = of_get_gpio(child, 0);
 		}
-	}
 
 	of_node_put(np);
 
