@@ -64,7 +64,7 @@ static void roach2_power_off(void)
         }
 
         for_each_child_of_node(np, child)
-                if (strcmp(child->name, "powerdown") == 0)
+                if (strcmp(child->name, "powerdown") == 0) {
                         pin = of_get_gpio(child, 0);
 		}
 
@@ -75,8 +75,6 @@ static void roach2_power_off(void)
 #if 0
 	gpio_set_value(pin, 1);
 #endif
-
-	return 0;
 }
 
 define_machine(roach2) {
