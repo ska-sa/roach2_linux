@@ -18,7 +18,9 @@
 #include <asm/uic.h>
 
 #include <linux/init.h>
+#include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/of_gpio.h>
 
 static __initdata struct of_device_id roach2_of_bus[] = {
 	{ .compatible = "ibm,plb4", },
