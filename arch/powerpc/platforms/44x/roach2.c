@@ -55,6 +55,8 @@ static void roach2_power_off(void)
         struct device_node *np, *child;
 	int pin;
 
+        pin = (-1);
+
         printk(KERN_INFO "attempting hardware power down");
 
         np = of_find_compatible_node(NULL, NULL, "gpio-pins");
@@ -70,11 +72,14 @@ static void roach2_power_off(void)
 
 	of_node_put(np);
 
-        printk(KERN_INFO "about to drive pin");
+        if(pin < 0){
+		printk(KERN_WARNING "no gpio for power circuit found");
+		return;
+	}
 
-#if 0
-	gpio_set_value(pin, 1);
-#endif
+        printk(KERN_INFO "about to drive pin low");
+
+	gpio_set_value(pin, 0);
 }
 
 define_machine(roach2) {
