@@ -52,32 +52,32 @@ static int __init roach2_probe(void)
 
 static void roach2_power_off(void)
 {
-        struct device_node *np, *child;
+	struct device_node *np, *child;
 	int pin;
 
-        pin = (-1);
+	pin = (-1);
 
-        printk(KERN_INFO "attempting hardware power down");
+	printk(KERN_INFO "attempting hardware power down");
 
-        np = of_find_compatible_node(NULL, NULL, "gpio-pins");
-        if (!np) {
-                printk(KERN_ERR "unable to locate gpio interface");
+	np = of_find_compatible_node(NULL, NULL, "gpio-pins");
+	if (!np) {
+		printk(KERN_ERR "unable to locate gpio interface");
 		return;
-        }
+	}
 
-        for_each_child_of_node(np, child)
-                if (strcmp(child->name, "powerdown") == 0) {
-                        pin = of_get_gpio(child, 0);
+	for_each_child_of_node(np, child)
+		if (strcmp(child->name, "powerdown") == 0) {
+			pin = of_get_gpio(child, 0);
 		}
 
 	of_node_put(np);
 
-        if(pin < 0){
+	if(pin < 0){
 		printk(KERN_WARNING "no gpio for power circuit found");
 		return;
 	}
 
-        printk(KERN_INFO "about to drive pin low");
+	printk(KERN_INFO "power off: about to drive power pin low");
 
 	gpio_set_value(pin, 0);
 }
