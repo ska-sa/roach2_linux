@@ -47,6 +47,8 @@
 
 static int roach_major = 0;
 static int roach_minor = 0;
+static int tmp = 1;
+uint32_t fpga_device_id;
 
 static DEFINE_MUTEX(roach2_mutex);
 
@@ -254,6 +256,12 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
                 word_count = will_write / 4;
                 src = fdev->tx_buf;
 
+                if(tmp == 1){
+                        printk(KERN_INFO "Programmed fpga device id = %08x", *(src+32));
+                        fpga_device_id = *(src + 32);
+                        tmp++;
+                }
+
                 for (i = 0; i < word_count; i++) {
                         out_be32((uint32_t *)(fdev->smap_virt), *src);
                         src++;
@@ -270,8 +278,9 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
 
         fdev->gw_bytes += have_written;
 
+        /* Virtex6 device:XQ6VSX475T = 0x04288093 */
         /* FPGA bitfiles have an exact size */
-        if (fdev->gw_bytes == SMAP_IMAGE_SIZE) {
+        if ((fdev->gw_bytes == SMAP_IMAGE_SIZE) && (fpga_device_id == V6_XQ6VSX475T_ID)) {
                 /* Poll until done pin is enabled */
                 for (i = 0; (i < SMAP_DONE_WAIT) && (gpio_get_value(fdev->done) == 0); i++);
 
@@ -284,6 +293,13 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
 
                 goto out_free_mutex;
         }
+        else{
+                if(fpga_device_id != V6_XQ6VSX475T_ID){
+                        printk(KERN_ERR "Attempted to program incorrect configuration onto Virtex6 FPGA");
+                        have_written = -EIO;
+
+                }
+        }
         retval = have_written;
 out_free_mutex:
         mutex_unlock(&fdev->mutex);
@@ -295,6 +311,7 @@ static int roach_config_release(struct inode *inode, struct file *filp)
 {
         struct fpga_device *rdev_config = filp->private_data;
         int status = 0;
+        tmp = 1;
 
         printk(KERN_NOTICE "roach release config called");
 

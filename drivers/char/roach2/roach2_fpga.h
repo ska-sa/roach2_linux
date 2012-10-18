@@ -28,6 +28,7 @@
 
 /* Default SX475T image size in bytes */
 #define SMAP_IMAGE_SIZE 19586188
+#define V6_XQ6VSX475T_ID 0x04288093
 
 #define ROACH_FPGA_LENGTH       0x004000000
 

@@ -294,6 +294,12 @@
         reg = <0xd0000000 0x4000000>;
       };
 
+     R2CHASSIS: r2chassis {
+       compatible = "kat,r2chassis";
+       interrupt-parent = <&UIC2>;
+       interrupts = <0x0 0x2>;
+     };
+
       SMAP:  smap@c0100000{
 	compatible = "smap";
 	reg = <0xc0100000 0x00200000>;
@@ -315,6 +321,10 @@
 
       gpio-pins {
 	       compatible = "gpio-pins";
+	       cpu_err {
+			gpios = <&GPIO0 10 0>;
+			default-state = "keep";
+	       };
 	       init_n {
 			gpios = <&GPIO0 12 0>;
 			default-state = "keep";
@@ -337,6 +347,10 @@
 	       };
 	       powerdown {
 			gpios = <&GPIO0 22 0>;
+			default-state = "keep";
+	       };
+	       cpu_rdy {
+			gpios = <&GPIO0 29 0>;
 			default-state = "keep";
 	       };
       };

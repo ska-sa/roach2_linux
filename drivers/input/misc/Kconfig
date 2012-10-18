@@ -444,6 +444,17 @@ config INPUT_PWM_BEEPER
 	  To compile this driver as a module, choose M here: the module will be
 	  called pwm-beeper.
 
+config INPUT_R2CHASSIS
+	tristate "ROACH2 Chassis input device driver"
+	depends on GPIOLIB && GENERIC_GPIO
+	help
+	  Say Y here to get support for ROACH2 chassis input support.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called r2case.
+
 config INPUT_GPIO_ROTARY_ENCODER
 	tristate "Rotary encoders connected to GPIO pins"
 	depends on GPIOLIB && GENERIC_GPIO
