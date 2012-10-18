@@ -42,24 +42,23 @@ static int __init roach2_probe(void)
 {
         unsigned long root = of_get_flat_dt_root();
 
-        if (of_flat_dt_is_compatible(root, "kat,roach2")) {
+	if (of_flat_dt_is_compatible(root, "kat,roach2")) {
 
-                printk(KERN_INFO "roach2: claiming matching platform");
+		printk(KERN_INFO "roach2: claiming matching platform");
 
-                pci_set_flags(PCI_REASSIGN_ALL_RSRC);
-
-                return 1;
-        }
+		pci_set_flags(PCI_REASSIGN_ALL_RSRC);
+		return 1;
+	}
 
         return 0;
 }
 
 static void roach2_power_off(void)
 {
-        struct device_node *np, *child;
-        int pin;
+	struct device_node *np, *child;
+	int pin;
 
-        pin = (-1);
+	pin = (-1);
 
         printk(KERN_INFO "roach2: performing hardware power down");
 
@@ -76,18 +75,16 @@ static void roach2_power_off(void)
 
         of_node_put(np);
 
-        if(pin < 0){
-                printk(KERN_WARNING "roach2: no gpio for power circuit found");
-                return;
-        }
+	if(pin < 0){
+		printk(KERN_WARNING "roach2: no gpio for power circuit found");
+		return;
+	}
 
+	printk(KERN_DEBUG "roach2: about to drive power pin low");
+	gpio_set_value(pin, 0);
 
-        printk(KERN_DEBUG "roach2: about to drive power pin low");
-        gpio_set_value(pin, 0);
-
-        printk(KERN_DEBUG "roach2: about to drive power pin high");
-        gpio_set_value(pin, 1);
-
+	printk(KERN_DEBUG "roach2: about to drive power pin high");
+	gpio_set_value(pin, 1);
 }
 
 define_machine(roach2) {
