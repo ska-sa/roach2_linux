@@ -83,6 +83,8 @@ static void roach2_power_off(void)
 	printk(KERN_DEBUG "roach2: about to drive power pin low");
 	gpio_set_value(pin, 0);
 
+	mdelay(100);
+
 	printk(KERN_DEBUG "roach2: about to drive power pin high");
 	gpio_set_value(pin, 1);
 }
