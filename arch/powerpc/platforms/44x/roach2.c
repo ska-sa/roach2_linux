@@ -17,6 +17,7 @@
 #include <asm/udbg.h>
 #include <asm/uic.h>
 
+#include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
