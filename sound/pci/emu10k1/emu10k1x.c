@@ -830,9 +830,22 @@ static irqreturn_t snd_emu10k1x_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static const struct snd_pcm_chmap_elem surround_map[] = {
+	{ .channels = 2,
+	  .map = { SNDRV_CHMAP_RL, SNDRV_CHMAP_RR } },
+	{ }
+};
+
+static const struct snd_pcm_chmap_elem clfe_map[] = {
+	{ .channels = 2,
+	  .map = { SNDRV_CHMAP_FC, SNDRV_CHMAP_LFE } },
+	{ }
+};
+
 static int __devinit snd_emu10k1x_pcm(struct emu10k1x *emu, int device, struct snd_pcm **rpcm)
 {
 	struct snd_pcm *pcm;
+	const struct snd_pcm_chmap_elem *map = NULL;
 	int err;
 	int capture = 0;
   
@@ -861,12 +874,15 @@ static int __devinit snd_emu10k1x_pcm(struct emu10k1x *emu, int device, struct s
 	switch(device) {
 	case 0:
 		strcpy(pcm->name, "EMU10K1X Front");
+		map = snd_pcm_std_chmaps;
 		break;
 	case 1:
 		strcpy(pcm->name, "EMU10K1X Rear");
+		map = surround_map;
 		break;
 	case 2:
 		strcpy(pcm->name, "EMU10K1X Center/LFE");
+		map = clfe_map;
 		break;
 	}
 	emu->pcm = pcm;
@@ -875,6 +891,11 @@ static int __devinit snd_emu10k1x_pcm(struct emu10k1x *emu, int device, struct s
 					      snd_dma_pci_data(emu->pci), 
 					      32*1024, 32*1024);
   
+	err = snd_pcm_add_chmap_ctls(pcm, SNDRV_PCM_STREAM_PLAYBACK, map, 2,
+				     1 << 2, NULL);
+	if (err < 0)
+		return err;
+
 	if (rpcm)
 		*rpcm = pcm;
   
@@ -1612,24 +1633,11 @@ static DEFINE_PCI_DEVICE_TABLE(snd_emu10k1x_ids) = {
 MODULE_DEVICE_TABLE(pci, snd_emu10k1x_ids);
 
 // pci_driver definition
-static struct pci_driver driver = {
+static struct pci_driver emu10k1x_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_emu10k1x_ids,
 	.probe = snd_emu10k1x_probe,
 	.remove = __devexit_p(snd_emu10k1x_remove),
 };
 
-// initialization of the module
-static int __init alsa_card_emu10k1x_init(void)
-{
-	return pci_register_driver(&driver);
-}
-
-// clean up the module
-static void __exit alsa_card_emu10k1x_exit(void)
-{
-	pci_unregister_driver(&driver);
-}
-
-module_init(alsa_card_emu10k1x_init)
-module_exit(alsa_card_emu10k1x_exit)
+module_pci_driver(emu10k1x_driver);

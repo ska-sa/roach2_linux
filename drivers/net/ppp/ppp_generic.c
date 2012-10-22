@@ -94,6 +94,18 @@ struct ppp_file {
 #define PF_TO_CHANNEL(pf)	PF_TO_X(pf, struct channel)
 
 /*
+ * Data structure to hold primary network stats for which
+ * we want to use 64 bit storage.  Other network stats
+ * are stored in dev->stats of the ppp strucute.
+ */
+struct ppp_link_stats {
+	u64 rx_packets;
+	u64 tx_packets;
+	u64 rx_bytes;
+	u64 tx_bytes;
+};
+
+/*
  * Data structure describing one ppp unit.
  * A ppp unit corresponds to a ppp network interface device
  * and represents a multilink bundle.
@@ -136,6 +148,7 @@ struct ppp {
 	unsigned pass_len, active_len;
 #endif /* CONFIG_PPP_FILTER */
 	struct net	*ppp_net;	/* the net we belong to */
+	struct ppp_link_stats stats64;	/* 64 bit network stats */
 };
 
 /*
@@ -235,7 +248,7 @@ struct ppp_net {
 /* Prototypes. */
 static int ppp_unattached_ioctl(struct net *net, struct ppp_file *pf,
 			struct file *file, unsigned int cmd, unsigned long arg);
-static int ppp_xmit_process(struct ppp *ppp);
+static void ppp_xmit_process(struct ppp *ppp);
 static void ppp_send_frame(struct ppp *ppp, struct sk_buff *skb);
 static void ppp_push(struct ppp *ppp);
 static void ppp_channel_push(struct channel *pch);
@@ -969,8 +982,7 @@ ppp_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	put_unaligned_be16(proto, pp);
 
 	skb_queue_tail(&ppp->file.xq, skb);
-	if (!ppp_xmit_process(ppp))
-		netif_stop_queue(dev);
+	ppp_xmit_process(ppp);
 	return NETDEV_TX_OK;
 
  outf:
@@ -1022,9 +1034,34 @@ ppp_net_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	return err;
 }
 
+struct rtnl_link_stats64*
+ppp_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats64)
+{
+	struct ppp *ppp = netdev_priv(dev);
+
+	ppp_recv_lock(ppp);
+	stats64->rx_packets = ppp->stats64.rx_packets;
+	stats64->rx_bytes   = ppp->stats64.rx_bytes;
+	ppp_recv_unlock(ppp);
+
+	ppp_xmit_lock(ppp);
+	stats64->tx_packets = ppp->stats64.tx_packets;
+	stats64->tx_bytes   = ppp->stats64.tx_bytes;
+	ppp_xmit_unlock(ppp);
+
+	stats64->rx_errors        = dev->stats.rx_errors;
+	stats64->tx_errors        = dev->stats.tx_errors;
+	stats64->rx_dropped       = dev->stats.rx_dropped;
+	stats64->tx_dropped       = dev->stats.tx_dropped;
+	stats64->rx_length_errors = dev->stats.rx_length_errors;
+
+	return stats64;
+}
+
 static const struct net_device_ops ppp_netdev_ops = {
-	.ndo_start_xmit = ppp_start_xmit,
-	.ndo_do_ioctl   = ppp_net_ioctl,
+	.ndo_start_xmit  = ppp_start_xmit,
+	.ndo_do_ioctl    = ppp_net_ioctl,
+	.ndo_get_stats64 = ppp_get_stats64,
 };
 
 static void ppp_setup(struct net_device *dev)
@@ -1048,11 +1085,10 @@ static void ppp_setup(struct net_device *dev)
  * Called to do any work queued up on the transmit side
  * that can now be done.
  */
-static int
+static void
 ppp_xmit_process(struct ppp *ppp)
 {
 	struct sk_buff *skb;
-	int ret = 0;
 
 	ppp_xmit_lock(ppp);
 	if (!ppp->closing) {
@@ -1062,13 +1098,12 @@ ppp_xmit_process(struct ppp *ppp)
 			ppp_send_frame(ppp, skb);
 		/* If there's no work left to do, tell the core net
 		   code that we can accept some more. */
-		if (!ppp->xmit_pending && !skb_peek(&ppp->file.xq)) {
+		if (!ppp->xmit_pending && !skb_peek(&ppp->file.xq))
 			netif_wake_queue(ppp->dev);
-			ret = 1;
-		}
+		else
+			netif_stop_queue(ppp->dev);
 	}
 	ppp_xmit_unlock(ppp);
-	return ret;
 }
 
 static inline struct sk_buff *
@@ -1095,13 +1130,13 @@ pad_compress_skb(struct ppp *ppp, struct sk_buff *skb)
 				   new_skb->data, skb->len + 2,
 				   compressor_skb_size);
 	if (len > 0 && (ppp->flags & SC_CCP_UP)) {
-		kfree_skb(skb);
+		consume_skb(skb);
 		skb = new_skb;
 		skb_put(skb, len);
 		skb_pull(skb, 2);	/* pull off A/C bytes */
 	} else if (len == 0) {
 		/* didn't compress, or CCP not up yet */
-		kfree_skb(new_skb);
+		consume_skb(new_skb);
 		new_skb = skb;
 	} else {
 		/*
@@ -1115,7 +1150,7 @@ pad_compress_skb(struct ppp *ppp, struct sk_buff *skb)
 		if (net_ratelimit())
 			netdev_err(ppp->dev, "ppp: compressor dropped pkt\n");
 		kfree_skb(skb);
-		kfree_skb(new_skb);
+		consume_skb(new_skb);
 		new_skb = NULL;
 	}
 	return new_skb;
@@ -1160,8 +1195,8 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 #endif /* CONFIG_PPP_FILTER */
 	}
 
-	++ppp->dev->stats.tx_packets;
-	ppp->dev->stats.tx_bytes += skb->len - 2;
+	++ppp->stats64.tx_packets;
+	ppp->stats64.tx_bytes += skb->len - 2;
 
 	switch (proto) {
 	case PPP_IP:
@@ -1181,7 +1216,7 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 				    !(ppp->flags & SC_NO_TCP_CCID));
 		if (cp == skb->data + 2) {
 			/* didn't compress */
-			kfree_skb(new_skb);
+			consume_skb(new_skb);
 		} else {
 			if (cp[0] & SL_TYPE_COMPRESSED_TCP) {
 				proto = PPP_VJC_COMP;
@@ -1190,7 +1225,7 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 				proto = PPP_VJC_UNCOMP;
 				cp[0] = skb->data[2];
 			}
-			kfree_skb(skb);
+			consume_skb(skb);
 			skb = new_skb;
 			cp = skb_put(skb, len + 2);
 			cp[0] = 0;
@@ -1706,7 +1741,7 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 			}
 			skb_reserve(ns, 2);
 			skb_copy_bits(skb, 0, skb_put(ns, skb->len), skb->len);
-			kfree_skb(skb);
+			consume_skb(skb);
 			skb = ns;
 		}
 		else
@@ -1748,8 +1783,8 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 		break;
 	}
 
-	++ppp->dev->stats.rx_packets;
-	ppp->dev->stats.rx_bytes += skb->len - 2;
+	++ppp->stats64.rx_packets;
+	ppp->stats64.rx_bytes += skb->len - 2;
 
 	npi = proto_to_npindex(proto);
 	if (npi < 0) {
@@ -1854,7 +1889,7 @@ ppp_decompress_frame(struct ppp *ppp, struct sk_buff *skb)
 			goto err;
 		}
 
-		kfree_skb(skb);
+		consume_skb(skb);
 		skb = ns;
 		skb_put(skb, len);
 		skb_pull(skb, 2);	/* pull off the A/C bytes */
@@ -2573,12 +2608,12 @@ ppp_get_stats(struct ppp *ppp, struct ppp_stats *st)
 	struct slcompress *vj = ppp->vj;
 
 	memset(st, 0, sizeof(*st));
-	st->p.ppp_ipackets = ppp->dev->stats.rx_packets;
+	st->p.ppp_ipackets = ppp->stats64.rx_packets;
 	st->p.ppp_ierrors = ppp->dev->stats.rx_errors;
-	st->p.ppp_ibytes = ppp->dev->stats.rx_bytes;
-	st->p.ppp_opackets = ppp->dev->stats.tx_packets;
+	st->p.ppp_ibytes = ppp->stats64.rx_bytes;
+	st->p.ppp_opackets = ppp->stats64.tx_packets;
 	st->p.ppp_oerrors = ppp->dev->stats.tx_errors;
-	st->p.ppp_obytes = ppp->dev->stats.tx_bytes;
+	st->p.ppp_obytes = ppp->stats64.tx_bytes;
 	if (!vj)
 		return;
 	st->vj.vjs_packets = vj->sls_o_compressed + vj->sls_o_uncompressed;

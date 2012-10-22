@@ -258,8 +258,7 @@ static int adau1701_set_playback_pcm_format(struct snd_soc_codec *codec,
 static int adau1701_hw_params(struct snd_pcm_substream *substream,
 		struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_codec *codec = dai->codec;
 	snd_pcm_format_t format;
 	unsigned int val;
 
@@ -528,17 +527,7 @@ static struct i2c_driver adau1701_i2c_driver = {
 	.id_table	= adau1701_i2c_id,
 };
 
-static int __init adau1701_init(void)
-{
-	return i2c_add_driver(&adau1701_i2c_driver);
-}
-module_init(adau1701_init);
-
-static void __exit adau1701_exit(void)
-{
-	i2c_del_driver(&adau1701_i2c_driver);
-}
-module_exit(adau1701_exit);
+module_i2c_driver(adau1701_i2c_driver);
 
 MODULE_DESCRIPTION("ASoC ADAU1701 SigmaDSP driver");
 MODULE_AUTHOR("Cliff Cai <cliff.cai@analog.com>");

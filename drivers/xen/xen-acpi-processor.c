@@ -29,6 +29,7 @@
 #include <acpi/acpi_drivers.h>
 #include <acpi/processor.h>
 
+#include <xen/xen.h>
 #include <xen/interface/platform.h>
 #include <asm/xen/hypercall.h>
 
@@ -97,7 +98,6 @@ static int push_cxx_to_hypervisor(struct acpi_processor *_pr)
 
 		dst_cx->type = cx->type;
 		dst_cx->latency = cx->latency;
-		dst_cx->power = cx->power;
 
 		dst_cx->dpcnt = 0;
 		set_xen_guest_handle(dst_cx->dp, NULL);
@@ -128,7 +128,10 @@ static int push_cxx_to_hypervisor(struct acpi_processor *_pr)
 			pr_debug("     C%d: %s %d uS\n",
 				 cx->type, cx->desc, (u32)cx->latency);
 		}
-	} else
+	} else if (ret != -EINVAL)
+		/* EINVAL means the ACPI ID is incorrect - meaning the ACPI
+		 * table is referencing a non-existing CPU - which can happen
+		 * with broken ACPI tables. */
 		pr_err(DRV_NAME "(CX): Hypervisor error (%d) for ACPI CPU%u\n",
 		       ret, _pr->acpi_id);
 
@@ -516,15 +519,18 @@ static int __init xen_acpi_processor_init(void)
 
 		if (!pr_backup) {
 			pr_backup = kzalloc(sizeof(struct acpi_processor), GFP_KERNEL);
-			memcpy(pr_backup, _pr, sizeof(struct acpi_processor));
+			if (pr_backup)
+				memcpy(pr_backup, _pr, sizeof(struct acpi_processor));
 		}
 		(void)upload_pm_data(_pr);
 	}
 	rc = check_acpi_ids(pr_backup);
-	if (rc)
-		goto err_unregister;
 
 	kfree(pr_backup);
+	pr_backup = NULL;
+
+	if (rc)
+		goto err_unregister;
 
 	return 0;
 err_unregister:

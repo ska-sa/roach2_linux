@@ -25,7 +25,8 @@
 #include <dspbridge/host_os.h>
 
 
-#define OMAP34XX_WDT3_BASE 		(L4_PER_34XX_BASE + 0x30000)
+#define OMAP34XX_WDT3_BASE 		(0x49000000 + 0x30000)
+#define INT_34XX_WDT3_IRQ 		(36 + NR_IRQS)
 
 static struct dsp_wdt_setting dsp_wdt;
 
@@ -53,14 +54,17 @@ int dsp_wdt_init(void)
 	int ret = 0;
 
 	dsp_wdt.sm_wdt = NULL;
-	dsp_wdt.reg_base = OMAP2_L4_IO_ADDRESS(OMAP34XX_WDT3_BASE);
+	dsp_wdt.reg_base = ioremap(OMAP34XX_WDT3_BASE, SZ_4K);
+	if (!dsp_wdt.reg_base)
+		return -ENOMEM;
+
 	tasklet_init(&dsp_wdt.wdt3_tasklet, dsp_wdt_dpc, 0);
 
 	dsp_wdt.fclk = clk_get(NULL, "wdt3_fck");
 
-	if (dsp_wdt.fclk) {
+	if (!IS_ERR(dsp_wdt.fclk)) {
 		dsp_wdt.iclk = clk_get(NULL, "wdt3_ick");
-		if (!dsp_wdt.iclk) {
+		if (IS_ERR(dsp_wdt.iclk)) {
 			clk_put(dsp_wdt.fclk);
 			dsp_wdt.fclk = NULL;
 			ret = -EFAULT;
@@ -99,6 +103,9 @@ void dsp_wdt_exit(void)
 	dsp_wdt.fclk = NULL;
 	dsp_wdt.iclk = NULL;
 	dsp_wdt.sm_wdt = NULL;
+
+	if (dsp_wdt.reg_base)
+		iounmap(dsp_wdt.reg_base);
 	dsp_wdt.reg_base = NULL;
 }
 

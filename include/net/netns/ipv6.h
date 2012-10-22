@@ -12,7 +12,9 @@ struct ctl_table_header;
 
 struct netns_sysctl_ipv6 {
 #ifdef CONFIG_SYSCTL
-	struct ctl_table_header *table;
+	struct ctl_table_header *hdr;
+	struct ctl_table_header *route_hdr;
+	struct ctl_table_header *icmp_hdr;
 	struct ctl_table_header *frags_hdr;
 #endif
 	int bindv6only;
@@ -31,6 +33,7 @@ struct netns_ipv6 {
 	struct netns_sysctl_ipv6 sysctl;
 	struct ipv6_devconf	*devconf_all;
 	struct ipv6_devconf	*devconf_dflt;
+	struct inet_peer_base	*peers;
 	struct netns_frags	frags;
 #ifdef CONFIG_NETFILTER
 	struct xt_table		*ip6table_filter;
@@ -39,6 +42,7 @@ struct netns_ipv6 {
 #ifdef CONFIG_SECURITY
 	struct xt_table		*ip6table_security;
 #endif
+	struct xt_table		*ip6table_nat;
 #endif
 	struct rt6_info         *ip6_null_entry;
 	struct rt6_statistics   *rt6_stats;
@@ -67,4 +71,12 @@ struct netns_ipv6 {
 #endif
 #endif
 };
+
+#if IS_ENABLED(CONFIG_NF_DEFRAG_IPV6)
+struct netns_nf_frag {
+	struct netns_sysctl_ipv6 sysctl;
+	struct netns_frags	frags;
+};
+#endif
+
 #endif

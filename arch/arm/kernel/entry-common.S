@@ -51,19 +51,15 @@ ret_fast_syscall:
 fast_work_pending:
 	str	r0, [sp, #S_R0+S_OFF]!		@ returned r0
 work_pending:
-	tst	r1, #_TIF_NEED_RESCHED
-	bne	work_resched
-	tst	r1, #_TIF_SIGPENDING|_TIF_NOTIFY_RESUME
-	beq	no_work_pending
 	mov	r0, sp				@ 'regs'
 	mov	r2, why				@ 'syscall'
-	tst	r1, #_TIF_SIGPENDING		@ delivering a signal?
-	movne	why, #0				@ prevent further restarts
-	bl	do_notify_resume
-	b	ret_slow_syscall		@ Check work again
+	bl	do_work_pending
+	cmp	r0, #0
+	beq	no_work_pending
+	movlt	scno, #(__NR_restart_syscall - __NR_SYSCALL_BASE)
+	ldmia	sp, {r0 - r6}			@ have to reload r0 - r6
+	b	local_restart			@ ... and off we go
 
-work_resched:
-	bl	schedule
 /*
  * "slow" syscall return path.  "why" tells us if this was a real syscall.
  */
@@ -90,20 +86,26 @@ ENDPROC(ret_to_user)
  */
 ENTRY(ret_from_fork)
 	bl	schedule_tail
-	get_thread_info tsk
-	ldr	r1, [tsk, #TI_FLAGS]		@ check for syscall tracing
-	mov	why, #1
-	tst	r1, #_TIF_SYSCALL_WORK		@ are we tracing syscalls?
-	beq	ret_slow_syscall
-	mov	r1, sp
-	mov	r0, #1				@ trace exit [IP = 1]
-	bl	syscall_trace
+	cmp	r5, #0
+	movne	r0, r4
+	adrne	lr, BSYM(1f)
+	movne	pc, r5
+1:	get_thread_info tsk
 	b	ret_slow_syscall
 ENDPROC(ret_from_fork)
 
 	.equ NR_syscalls,0
 #define CALL(x) .equ NR_syscalls,NR_syscalls+1
 #include "calls.S"
+
+/*
+ * Ensure that the system call table is equal to __NR_syscalls,
+ * which is the value the rest of the system sees
+ */
+.ifne NR_syscalls - __NR_syscalls
+.error "__NR_syscalls is not equal to the size of the syscall table"
+.endif
+
 #undef CALL
 #define CALL(x) .long x
 
@@ -335,20 +337,6 @@ ENDPROC(ftrace_stub)
  *-----------------------------------------------------------------------------
  */
 
-	/* If we're optimising for StrongARM the resulting code won't 
-	   run on an ARM7 and we can save a couple of instructions.  
-								--pb */
-#ifdef CONFIG_CPU_ARM710
-#define A710(code...) code
-.Larm710bug:
-	ldmia	sp, {r0 - lr}^			@ Get calling r0 - lr
-	mov	r0, r0
-	add	sp, sp, #S_FRAME_SIZE
-	subs	pc, lr, #4
-#else
-#define A710(code...)
-#endif
-
 	.align	5
 ENTRY(vector_swi)
 	sub	sp, sp, #S_FRAME_SIZE
@@ -379,9 +367,6 @@ ENTRY(vector_swi)
 	ldreq	r10, [lr, #-4]			@ get SWI instruction
 #else
 	ldr	r10, [lr, #-4]			@ get SWI instruction
-  A710(	and	ip, r10, #0x0f000000		@ check for SWI		)
-  A710(	teq	ip, #0x0f000000						)
-  A710(	bne	.Larm710bug						)
 #endif
 #ifdef CONFIG_CPU_ENDIAN_BE8
 	rev	r10, r10			@ little endian instruction
@@ -392,26 +377,15 @@ ENTRY(vector_swi)
 	/*
 	 * Pure EABI user space always put syscall number into scno (r7).
 	 */
-  A710(	ldr	ip, [lr, #-4]			@ get SWI instruction	)
-  A710(	and	ip, ip, #0x0f000000		@ check for SWI		)
-  A710(	teq	ip, #0x0f000000						)
-  A710(	bne	.Larm710bug						)
-
 #elif defined(CONFIG_ARM_THUMB)
-
 	/* Legacy ABI only, possibly thumb mode. */
 	tst	r8, #PSR_T_BIT			@ this is SPSR from save_user_regs
 	addne	scno, r7, #__NR_SYSCALL_BASE	@ put OS number in
 	ldreq	scno, [lr, #-4]
 
 #else
-
 	/* Legacy ABI only. */
 	ldr	scno, [lr, #-4]			@ get SWI instruction
-  A710(	and	ip, scno, #0x0f000000		@ check for SWI		)
-  A710(	teq	ip, #0x0f000000						)
-  A710(	bne	.Larm710bug						)
-
 #endif
 
 #ifdef CONFIG_ALIGNMENT_TRAP
@@ -439,6 +413,7 @@ ENTRY(vector_swi)
 	eor	scno, scno, #__NR_SYSCALL_BASE	@ check OS number
 #endif
 
+local_restart:
 	ldr	r10, [tsk, #TI_FLAGS]		@ check for syscall tracing
 	stmdb	sp!, {r4, r5}			@ push fifth and sixth args
 
@@ -472,25 +447,24 @@ ENDPROC(vector_swi)
 	 * context switches, and waiting for our parent to respond.
 	 */
 __sys_trace:
-	mov	r2, scno
-	add	r1, sp, #S_OFF
-	mov	r0, #0				@ trace entry [IP = 0]
-	bl	syscall_trace
+	mov	r1, scno
+	add	r0, sp, #S_OFF
+	bl	syscall_trace_enter
 
 	adr	lr, BSYM(__sys_trace_return)	@ return address
 	mov	scno, r0			@ syscall number (possibly new)
 	add	r1, sp, #S_R0 + S_OFF		@ pointer to regs
 	cmp	scno, #NR_syscalls		@ check upper syscall limit
-	ldmccia	r1, {r0 - r3}			@ have to reload r0 - r3
+	ldmccia	r1, {r0 - r6}			@ have to reload r0 - r6
+	stmccia	sp, {r4, r5}			@ and update the stack args
 	ldrcc	pc, [tbl, scno, lsl #2]		@ call sys_* routine
 	b	2b
 
 __sys_trace_return:
 	str	r0, [sp, #S_R0 + S_OFF]!	@ save returned r0
-	mov	r2, scno
-	mov	r1, sp
-	mov	r0, #1				@ trace exit [IP = 1]
-	bl	syscall_trace
+	mov	r1, scno
+	mov	r0, sp
+	bl	syscall_trace_exit
 	b	ret_slow_syscall
 
 	.align	5
@@ -545,11 +519,6 @@ sys_vfork_wrapper:
 		add	r0, sp, #S_OFF
 		b	sys_vfork
 ENDPROC(sys_vfork_wrapper)
-
-sys_execve_wrapper:
-		add	r3, sp, #S_OFF
-		b	sys_execve
-ENDPROC(sys_execve_wrapper)
 
 sys_clone_wrapper:
 		add	ip, sp, #S_OFF

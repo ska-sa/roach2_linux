@@ -83,29 +83,6 @@ Devices: [Quanser Consulting] MultiQ-3 (multiq3)
 
 #define MULTIQ3_TIMEOUT 30
 
-static int multiq3_attach(struct comedi_device *dev,
-			  struct comedi_devconfig *it);
-static int multiq3_detach(struct comedi_device *dev);
-static struct comedi_driver driver_multiq3 = {
-	.driver_name = "multiq3",
-	.module = THIS_MODULE,
-	.attach = multiq3_attach,
-	.detach = multiq3_detach,
-};
-
-static int __init driver_multiq3_init_module(void)
-{
-	return comedi_driver_register(&driver_multiq3);
-}
-
-static void __exit driver_multiq3_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_multiq3);
-}
-
-module_init(driver_multiq3_init_module);
-module_exit(driver_multiq3_cleanup_module);
-
 struct multiq3_private {
 	unsigned int ao_readback[2];
 };
@@ -184,28 +161,22 @@ static int multiq3_di_insn_bits(struct comedi_device *dev,
 				struct comedi_subdevice *s,
 				struct comedi_insn *insn, unsigned int *data)
 {
-	if (insn->n != 2)
-		return -EINVAL;
-
 	data[1] = inw(dev->iobase + MULTIQ3_DIGIN_PORT);
 
-	return 2;
+	return insn->n;
 }
 
 static int multiq3_do_insn_bits(struct comedi_device *dev,
 				struct comedi_subdevice *s,
 				struct comedi_insn *insn, unsigned int *data)
 {
-	if (insn->n != 2)
-		return -EINVAL;
-
 	s->state &= ~data[0];
 	s->state |= (data[0] & data[1]);
 	outw(s->state, dev->iobase + MULTIQ3_DIGOUT_PORT);
 
 	data[1] = s->state;
 
-	return 2;
+	return insn->n;
 }
 
 static int multiq3_encoder_insn_read(struct comedi_device *dev,
@@ -233,8 +204,10 @@ static int multiq3_encoder_insn_read(struct comedi_device *dev,
 
 static void encoder_reset(struct comedi_device *dev)
 {
+	struct comedi_subdevice *s = &dev->subdevices[4];
 	int chan;
-	for (chan = 0; chan < dev->subdevices[4].n_chan; chan++) {
+
+	for (chan = 0; chan < s->n_chan; chan++) {
 		int control =
 		    MULTIQ3_CONTROL_MUST | MULTIQ3_AD_MUX_EN | (chan << 3);
 		outw(control, dev->iobase + MULTIQ3_CONTROL);
@@ -278,15 +251,16 @@ static int multiq3_attach(struct comedi_device *dev,
 	else
 		printk(KERN_WARNING "comedi%d: no irq\n", dev->minor);
 	dev->board_name = "multiq3";
-	result = alloc_subdevices(dev, 5);
-	if (result < 0)
+
+	result = comedi_alloc_subdevices(dev, 5);
+	if (result)
 		return result;
 
 	result = alloc_private(dev, sizeof(struct multiq3_private));
 	if (result < 0)
 		return result;
 
-	s = dev->subdevices + 0;
+	s = &dev->subdevices[0];
 	/* ai subdevice */
 	s->type = COMEDI_SUBD_AI;
 	s->subdev_flags = SDF_READABLE | SDF_GROUND;
@@ -295,7 +269,7 @@ static int multiq3_attach(struct comedi_device *dev,
 	s->maxdata = 0x1fff;
 	s->range_table = &range_bipolar5;
 
-	s = dev->subdevices + 1;
+	s = &dev->subdevices[1];
 	/* ao subdevice */
 	s->type = COMEDI_SUBD_AO;
 	s->subdev_flags = SDF_WRITABLE;
@@ -305,7 +279,7 @@ static int multiq3_attach(struct comedi_device *dev,
 	s->maxdata = 0xfff;
 	s->range_table = &range_bipolar5;
 
-	s = dev->subdevices + 2;
+	s = &dev->subdevices[2];
 	/* di subdevice */
 	s->type = COMEDI_SUBD_DI;
 	s->subdev_flags = SDF_READABLE;
@@ -314,7 +288,7 @@ static int multiq3_attach(struct comedi_device *dev,
 	s->maxdata = 1;
 	s->range_table = &range_digital;
 
-	s = dev->subdevices + 3;
+	s = &dev->subdevices[3];
 	/* do subdevice */
 	s->type = COMEDI_SUBD_DO;
 	s->subdev_flags = SDF_WRITABLE;
@@ -324,7 +298,7 @@ static int multiq3_attach(struct comedi_device *dev,
 	s->range_table = &range_digital;
 	s->state = 0;
 
-	s = dev->subdevices + 4;
+	s = &dev->subdevices[4];
 	/* encoder (counter) subdevice */
 	s->type = COMEDI_SUBD_COUNTER;
 	s->subdev_flags = SDF_READABLE | SDF_LSAMPL;
@@ -338,17 +312,21 @@ static int multiq3_attach(struct comedi_device *dev,
 	return 0;
 }
 
-static int multiq3_detach(struct comedi_device *dev)
+static void multiq3_detach(struct comedi_device *dev)
 {
-	printk(KERN_INFO "comedi%d: multiq3: remove\n", dev->minor);
-
 	if (dev->iobase)
 		release_region(dev->iobase, MULTIQ3_SIZE);
 	if (dev->irq)
 		free_irq(dev->irq, dev);
-
-	return 0;
 }
+
+static struct comedi_driver multiq3_driver = {
+	.driver_name	= "multiq3",
+	.module		= THIS_MODULE,
+	.attach		= multiq3_attach,
+	.detach		= multiq3_detach,
+};
+module_comedi_driver(multiq3_driver);
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");

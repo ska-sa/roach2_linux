@@ -1,7 +1,7 @@
 /*
  * Broadcom BCM63xx SPI controller support
  *
- * Copyright (C) 2009-2011 Florian Fainelli <florian@openwrt.org>
+ * Copyright (C) 2009-2012 Florian Fainelli <florian@openwrt.org>
  * Copyright (C) 2010 Tanguy Bouzeloc <tanguy.bouzeloc@efixo.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -30,6 +30,8 @@
 #include <linux/spi/spi.h>
 #include <linux/completion.h>
 #include <linux/err.h>
+#include <linux/workqueue.h>
+#include <linux/pm_runtime.h>
 
 #include <bcm63xx_dev_spi.h>
 
@@ -37,8 +39,6 @@
 #define DRV_VER		"0.1.2"
 
 struct bcm63xx_spi {
-	spinlock_t		lock;
-	int			stopping;
 	struct completion	done;
 
 	void __iomem		*regs;
@@ -47,6 +47,8 @@ struct bcm63xx_spi {
 	/* Platform data */
 	u32			speed_hz;
 	unsigned		fifo_size;
+	unsigned int		msg_type_shift;
+	unsigned int		msg_ctl_width;
 
 	/* Data buffers */
 	const unsigned char	*tx_ptr;
@@ -96,17 +98,12 @@ static const unsigned bcm63xx_spi_freq_table[SPI_CLK_MASK][2] = {
 	{   391000, SPI_CLK_0_391MHZ }
 };
 
-static int bcm63xx_spi_setup_transfer(struct spi_device *spi,
-				      struct spi_transfer *t)
+static int bcm63xx_spi_check_transfer(struct spi_device *spi,
+					struct spi_transfer *t)
 {
-	struct bcm63xx_spi *bs = spi_master_get_devdata(spi->master);
 	u8 bits_per_word;
-	u8 clk_cfg, reg;
-	u32 hz;
-	int i;
 
 	bits_per_word = (t) ? t->bits_per_word : spi->bits_per_word;
-	hz = (t) ? t->speed_hz : spi->max_speed_hz;
 	if (bits_per_word != 8) {
 		dev_err(&spi->dev, "%s, unsupported bits_per_word=%d\n",
 			__func__, bits_per_word);
@@ -119,9 +116,22 @@ static int bcm63xx_spi_setup_transfer(struct spi_device *spi,
 		return -EINVAL;
 	}
 
+	return 0;
+}
+
+static void bcm63xx_spi_setup_transfer(struct spi_device *spi,
+				      struct spi_transfer *t)
+{
+	struct bcm63xx_spi *bs = spi_master_get_devdata(spi->master);
+	u32 hz;
+	u8 clk_cfg, reg;
+	int i;
+
+	hz = (t) ? t->speed_hz : spi->max_speed_hz;
+
 	/* Find the closest clock configuration */
 	for (i = 0; i < SPI_CLK_MASK; i++) {
-		if (hz <= bcm63xx_spi_freq_table[i][0]) {
+		if (hz >= bcm63xx_spi_freq_table[i][0]) {
 			clk_cfg = bcm63xx_spi_freq_table[i][1];
 			break;
 		}
@@ -139,8 +149,6 @@ static int bcm63xx_spi_setup_transfer(struct spi_device *spi,
 	bcm_spi_writeb(bs, reg, SPI_CLK_CFG);
 	dev_dbg(&spi->dev, "Setting clock register to %02x (hz %d)\n",
 		clk_cfg, hz);
-
-	return 0;
 }
 
 /* the spi->mode bits understood by this driver: */
@@ -153,9 +161,6 @@ static int bcm63xx_spi_setup(struct spi_device *spi)
 
 	bs = spi_master_get_devdata(spi->master);
 
-	if (bs->stopping)
-		return -ESHUTDOWN;
-
 	if (!spi->bits_per_word)
 		spi->bits_per_word = 8;
 
@@ -165,7 +170,7 @@ static int bcm63xx_spi_setup(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	ret = bcm63xx_spi_setup_transfer(spi, NULL);
+	ret = bcm63xx_spi_check_transfer(spi, NULL);
 	if (ret < 0) {
 		dev_err(&spi->dev, "setup: unsupported mode bits %x\n",
 			spi->mode & ~MODEBITS);
@@ -190,11 +195,15 @@ static void bcm63xx_spi_fill_tx_fifo(struct bcm63xx_spi *bs)
 	bs->remaining_bytes -= size;
 }
 
-static int bcm63xx_txrx_bufs(struct spi_device *spi, struct spi_transfer *t)
+static unsigned int bcm63xx_txrx_bufs(struct spi_device *spi,
+					struct spi_transfer *t)
 {
 	struct bcm63xx_spi *bs = spi_master_get_devdata(spi->master);
 	u16 msg_ctl;
 	u16 cmd;
+
+	/* Disable the CMD_DONE interrupt */
+	bcm_spi_writeb(bs, 0, SPI_INT_MASK);
 
 	dev_dbg(&spi->dev, "txrx: tx %p, rx %p, len %d\n",
 		t->tx_buf, t->rx_buf, t->len);
@@ -202,61 +211,108 @@ static int bcm63xx_txrx_bufs(struct spi_device *spi, struct spi_transfer *t)
 	/* Transmitter is inhibited */
 	bs->tx_ptr = t->tx_buf;
 	bs->rx_ptr = t->rx_buf;
-	init_completion(&bs->done);
 
 	if (t->tx_buf) {
 		bs->remaining_bytes = t->len;
 		bcm63xx_spi_fill_tx_fifo(bs);
 	}
 
-	/* Enable the command done interrupt which
-	 * we use to determine completion of a command */
-	bcm_spi_writeb(bs, SPI_INTR_CMD_DONE, SPI_INT_MASK);
+	init_completion(&bs->done);
 
 	/* Fill in the Message control register */
 	msg_ctl = (t->len << SPI_BYTE_CNT_SHIFT);
 
 	if (t->rx_buf && t->tx_buf)
-		msg_ctl |= (SPI_FD_RW << SPI_MSG_TYPE_SHIFT);
+		msg_ctl |= (SPI_FD_RW << bs->msg_type_shift);
 	else if (t->rx_buf)
-		msg_ctl |= (SPI_HD_R << SPI_MSG_TYPE_SHIFT);
+		msg_ctl |= (SPI_HD_R << bs->msg_type_shift);
 	else if (t->tx_buf)
-		msg_ctl |= (SPI_HD_W << SPI_MSG_TYPE_SHIFT);
+		msg_ctl |= (SPI_HD_W << bs->msg_type_shift);
 
-	bcm_spi_writew(bs, msg_ctl, SPI_MSG_CTL);
+	switch (bs->msg_ctl_width) {
+	case 8:
+		bcm_spi_writeb(bs, msg_ctl, SPI_MSG_CTL);
+		break;
+	case 16:
+		bcm_spi_writew(bs, msg_ctl, SPI_MSG_CTL);
+		break;
+	}
 
 	/* Issue the transfer */
 	cmd = SPI_CMD_START_IMMEDIATE;
 	cmd |= (0 << SPI_CMD_PREPEND_BYTE_CNT_SHIFT);
 	cmd |= (spi->chip_select << SPI_CMD_DEVICE_ID_SHIFT);
 	bcm_spi_writew(bs, cmd, SPI_CMD);
-	wait_for_completion(&bs->done);
 
-	/* Disable the CMD_DONE interrupt */
-	bcm_spi_writeb(bs, 0, SPI_INT_MASK);
+	/* Enable the CMD_DONE interrupt */
+	bcm_spi_writeb(bs, SPI_INTR_CMD_DONE, SPI_INT_MASK);
 
 	return t->len - bs->remaining_bytes;
 }
 
-static int bcm63xx_transfer(struct spi_device *spi, struct spi_message *m)
+static int bcm63xx_spi_prepare_transfer(struct spi_master *master)
 {
-	struct bcm63xx_spi *bs = spi_master_get_devdata(spi->master);
+	struct bcm63xx_spi *bs = spi_master_get_devdata(master);
+
+	pm_runtime_get_sync(&bs->pdev->dev);
+
+	return 0;
+}
+
+static int bcm63xx_spi_unprepare_transfer(struct spi_master *master)
+{
+	struct bcm63xx_spi *bs = spi_master_get_devdata(master);
+
+	pm_runtime_put(&bs->pdev->dev);
+
+	return 0;
+}
+
+static int bcm63xx_spi_transfer_one(struct spi_master *master,
+					struct spi_message *m)
+{
+	struct bcm63xx_spi *bs = spi_master_get_devdata(master);
 	struct spi_transfer *t;
-	int ret = 0;
-
-	if (unlikely(list_empty(&m->transfers)))
-		return -EINVAL;
-
-	if (bs->stopping)
-		return -ESHUTDOWN;
+	struct spi_device *spi = m->spi;
+	int status = 0;
+	unsigned int timeout = 0;
 
 	list_for_each_entry(t, &m->transfers, transfer_list) {
-		ret += bcm63xx_txrx_bufs(spi, t);
+		unsigned int len = t->len;
+		u8 rx_tail;
+
+		status = bcm63xx_spi_check_transfer(spi, t);
+		if (status < 0)
+			goto exit;
+
+		/* configure adapter for a new transfer */
+		bcm63xx_spi_setup_transfer(spi, t);
+
+		while (len) {
+			/* send the data */
+			len -= bcm63xx_txrx_bufs(spi, t);
+
+			timeout = wait_for_completion_timeout(&bs->done, HZ);
+			if (!timeout) {
+				status = -ETIMEDOUT;
+				goto exit;
+			}
+
+			/* read out all data */
+			rx_tail = bcm_spi_readb(bs, SPI_RX_TAIL);
+
+			/* Read out all the data */
+			if (rx_tail)
+				memcpy_fromio(bs->rx_ptr, bs->rx_io, rx_tail);
+		}
+
+		m->actual_length += t->len;
 	}
+exit:
+	m->status = status;
+	spi_finalize_current_message(master);
 
-	m->complete(m->context);
-
-	return ret;
+	return 0;
 }
 
 /* This driver supports single master mode only. Hence
@@ -267,39 +323,15 @@ static irqreturn_t bcm63xx_spi_interrupt(int irq, void *dev_id)
 	struct spi_master *master = (struct spi_master *)dev_id;
 	struct bcm63xx_spi *bs = spi_master_get_devdata(master);
 	u8 intr;
-	u16 cmd;
 
 	/* Read interupts and clear them immediately */
 	intr = bcm_spi_readb(bs, SPI_INT_STATUS);
 	bcm_spi_writeb(bs, SPI_INTR_CLEAR_ALL, SPI_INT_STATUS);
 	bcm_spi_writeb(bs, 0, SPI_INT_MASK);
 
-	/* A tansfer completed */
-	if (intr & SPI_INTR_CMD_DONE) {
-		u8 rx_tail;
-
-		rx_tail = bcm_spi_readb(bs, SPI_RX_TAIL);
-
-		/* Read out all the data */
-		if (rx_tail)
-			memcpy_fromio(bs->rx_ptr, bs->rx_io, rx_tail);
-
-		/* See if there is more data to send */
-		if (bs->remaining_bytes > 0) {
-			bcm63xx_spi_fill_tx_fifo(bs);
-
-			/* Start the transfer */
-			bcm_spi_writew(bs, SPI_HD_W << SPI_MSG_TYPE_SHIFT,
-				       SPI_MSG_CTL);
-			cmd = bcm_spi_readw(bs, SPI_CMD);
-			cmd |= SPI_CMD_START_IMMEDIATE;
-			cmd |= (0 << SPI_CMD_PREPEND_BYTE_CNT_SHIFT);
-			bcm_spi_writeb(bs, SPI_INTR_CMD_DONE, SPI_INT_MASK);
-			bcm_spi_writew(bs, cmd, SPI_CMD);
-		} else {
-			complete(&bs->done);
-		}
-	}
+	/* A transfer completed */
+	if (intr & SPI_INTR_CMD_DONE)
+		complete(&bs->done);
 
 	return IRQ_HANDLED;
 }
@@ -345,7 +377,6 @@ static int __devinit bcm63xx_spi_probe(struct platform_device *pdev)
 	}
 
 	bs = spi_master_get_devdata(master);
-	init_completion(&bs->done);
 
 	platform_set_drvdata(pdev, master);
 	bs->pdev = pdev;
@@ -379,12 +410,25 @@ static int __devinit bcm63xx_spi_probe(struct platform_device *pdev)
 	master->bus_num = pdata->bus_num;
 	master->num_chipselect = pdata->num_chipselect;
 	master->setup = bcm63xx_spi_setup;
-	master->transfer = bcm63xx_transfer;
+	master->prepare_transfer_hardware = bcm63xx_spi_prepare_transfer;
+	master->unprepare_transfer_hardware = bcm63xx_spi_unprepare_transfer;
+	master->transfer_one_message = bcm63xx_spi_transfer_one;
+	master->mode_bits = MODEBITS;
 	bs->speed_hz = pdata->speed_hz;
-	bs->stopping = 0;
+	bs->msg_type_shift = pdata->msg_type_shift;
+	bs->msg_ctl_width = pdata->msg_ctl_width;
 	bs->tx_io = (u8 *)(bs->regs + bcm63xx_spireg(SPI_MSG_DATA));
 	bs->rx_io = (const u8 *)(bs->regs + bcm63xx_spireg(SPI_RX_DATA));
-	spin_lock_init(&bs->lock);
+
+	switch (bs->msg_ctl_width) {
+	case 8:
+	case 16:
+		break;
+	default:
+		dev_err(dev, "unsupported MSG_CTL width: %d\n",
+			 bs->msg_ctl_width);
+		goto out_clk_disable;
+	}
 
 	/* Initialize hardware */
 	clk_enable(bs->clk);
@@ -415,21 +459,21 @@ out:
 
 static int __devexit bcm63xx_spi_remove(struct platform_device *pdev)
 {
-	struct spi_master *master = platform_get_drvdata(pdev);
+	struct spi_master *master = spi_master_get(platform_get_drvdata(pdev));
 	struct bcm63xx_spi *bs = spi_master_get_devdata(master);
+
+	spi_unregister_master(master);
 
 	/* reset spi block */
 	bcm_spi_writeb(bs, 0, SPI_INT_MASK);
-	spin_lock(&bs->lock);
-	bs->stopping = 1;
 
 	/* HW shutdown */
 	clk_disable(bs->clk);
 	clk_put(bs->clk);
 
-	spin_unlock(&bs->lock);
 	platform_set_drvdata(pdev, 0);
-	spi_unregister_master(master);
+
+	spi_master_put(master);
 
 	return 0;
 }

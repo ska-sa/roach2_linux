@@ -18,8 +18,7 @@ extern int iscsit_logout_closesession(struct iscsi_cmd *, struct iscsi_conn *);
 extern int iscsit_logout_closeconnection(struct iscsi_cmd *, struct iscsi_conn *);
 extern int iscsit_logout_removeconnforrecovery(struct iscsi_cmd *, struct iscsi_conn *);
 extern int iscsit_send_async_msg(struct iscsi_conn *, u16, u8, u8);
-extern int iscsit_send_r2t(struct iscsi_cmd *, struct iscsi_conn *);
-extern int iscsit_build_r2ts_for_cmd(struct iscsi_cmd *, struct iscsi_conn *, int);
+extern int iscsit_build_r2ts_for_cmd(struct iscsi_cmd *, struct iscsi_conn *, bool recovery);
 extern void iscsit_thread_get_cpumask(struct iscsi_conn *);
 extern int iscsi_target_tx_thread(void *);
 extern int iscsi_target_rx_thread(void *);
@@ -38,5 +37,10 @@ extern struct kmem_cache *lio_ooo_cache;
 extern struct kmem_cache *lio_cmd_cache;
 extern struct kmem_cache *lio_qr_cache;
 extern struct kmem_cache *lio_r2t_cache;
+
+extern struct idr sess_idr;
+extern struct mutex auth_id_lock;
+extern spinlock_t sess_idr_lock;
+
 
 #endif   /*** ISCSI_TARGET_H ***/

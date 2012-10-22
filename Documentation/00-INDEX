@@ -218,8 +218,6 @@ m68k/
 	- directory with info about Linux on Motorola 68k architecture.
 magic-number.txt
 	- list of magic numbers used to mark/protect kernel data structures.
-mca.txt
-	- info on supporting Micro Channel Architecture (e.g. PS/2) systems.
 md.txt
 	- info on boot arguments for the multiple devices driver.
 memory-barriers.txt
@@ -272,8 +270,6 @@ preempt-locking.txt
 	- info on locking under a preemptive kernel.
 printk-formats.txt
 	- how to get printk format specifiers right
-prio_tree.txt
-	- info on radix-priority-search-tree use for indexing vmas.
 ramoops.txt
 	- documentation of the ramoops oops/panic logging module.
 rbtree.txt

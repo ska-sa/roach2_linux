@@ -478,8 +478,7 @@ static int wm8971_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params,
 	struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_codec *codec = dai->codec;
 	struct wm8971_priv *wm8971 = snd_soc_codec_get_drvdata(codec);
 	u16 iface = snd_soc_read(codec, WM8971_IFACE) & 0x1f3;
 	u16 srate = snd_soc_read(codec, WM8971_SRATE) & 0x1c0;
@@ -722,23 +721,7 @@ static struct i2c_driver wm8971_i2c_driver = {
 	.id_table = wm8971_i2c_id,
 };
 
-static int __init wm8971_modinit(void)
-{
-	int ret = 0;
-	ret = i2c_add_driver(&wm8971_i2c_driver);
-	if (ret != 0) {
-		printk(KERN_ERR "Failed to register WM8971 I2C driver: %d\n",
-		       ret);
-	}
-	return ret;
-}
-module_init(wm8971_modinit);
-
-static void __exit wm8971_exit(void)
-{
-	i2c_del_driver(&wm8971_i2c_driver);
-}
-module_exit(wm8971_exit);
+module_i2c_driver(wm8971_i2c_driver);
 
 MODULE_DESCRIPTION("ASoC WM8971 driver");
 MODULE_AUTHOR("Lab126");

@@ -248,9 +248,10 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
 				   addr, regs->nip, regs->link, code);
 	}
 
-	if (!arch_irq_disabled_regs(regs))
+	if (arch_irqs_disabled() && !arch_irq_disabled_regs(regs))
 		local_irq_enable();
 
+	current->thread.trap_nr = code;
 	memset(&info, 0, sizeof(info));
 	info.si_signo = signr;
 	info.si_code = code;
@@ -972,8 +973,9 @@ static int emulate_instruction(struct pt_regs *regs)
 			cpu_has_feature(CPU_FTR_DSCR)) {
 		PPC_WARN_EMULATED(mtdscr, regs);
 		rd = (instword >> 21) & 0x1f;
-		mtspr(SPRN_DSCR, regs->gpr[rd]);
+		current->thread.dscr = regs->gpr[rd];
 		current->thread.dscr_inherit = 1;
+		mtspr(SPRN_DSCR, current->thread.dscr);
 		return 0;
 	}
 #endif
@@ -1019,7 +1021,9 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 		return;
 	}
 
-	local_irq_enable();
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 #ifdef CONFIG_MATH_EMULATION
 	/* (reason & REASON_ILLEGAL) would be the obvious thing here,
@@ -1068,6 +1072,10 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 void alignment_exception(struct pt_regs *regs)
 {
 	int sig, code, fixed = 0;
+
+	/* We restore the interrupt state now */
+	if (!arch_irq_disabled_regs(regs))
+		local_irq_enable();
 
 	/* we don't implement logging of alignment exceptions */
 	if (!(current->thread.align_ctl & PR_UNALIGN_SIGBUS))

@@ -2446,10 +2446,15 @@ static int __devinit ab8500_fg_probe(struct platform_device *pdev)
 {
 	int i, irq;
 	int ret = 0;
-	struct abx500_bm_plat_data *plat_data;
+	struct abx500_bm_plat_data *plat_data = pdev->dev.platform_data;
+	struct ab8500_fg *di;
 
-	struct ab8500_fg *di =
-		kzalloc(sizeof(struct ab8500_fg), GFP_KERNEL);
+	if (!plat_data) {
+		dev_err(&pdev->dev, "No platform data\n");
+		return -EINVAL;
+	}
+
+	di = kzalloc(sizeof(*di), GFP_KERNEL);
 	if (!di)
 		return -ENOMEM;
 
@@ -2461,7 +2466,6 @@ static int __devinit ab8500_fg_probe(struct platform_device *pdev)
 	di->gpadc = ab8500_gpadc_get("ab8500-gpadc.0");
 
 	/* get fg specific platform data */
-	plat_data = pdev->dev.platform_data;
 	di->pdata = plat_data->fg;
 	if (!di->pdata) {
 		dev_err(di->dev, "no fg platform data supplied\n");
@@ -2502,6 +2506,7 @@ static int __devinit ab8500_fg_probe(struct platform_device *pdev)
 	di->fg_wq = create_singlethread_workqueue("ab8500_fg_wq");
 	if (di->fg_wq == NULL) {
 		dev_err(di->dev, "failed to create work queue\n");
+		ret = -ENOMEM;
 		goto free_device_info;
 	}
 
@@ -2512,19 +2517,19 @@ static int __devinit ab8500_fg_probe(struct platform_device *pdev)
 	INIT_WORK(&di->fg_acc_cur_work, ab8500_fg_acc_cur_work);
 
 	/* Init work for reinitialising the fg algorithm */
-	INIT_DELAYED_WORK_DEFERRABLE(&di->fg_reinit_work,
+	INIT_DEFERRABLE_WORK(&di->fg_reinit_work,
 		ab8500_fg_reinit_work);
 
 	/* Work delayed Queue to run the state machine */
-	INIT_DELAYED_WORK_DEFERRABLE(&di->fg_periodic_work,
+	INIT_DEFERRABLE_WORK(&di->fg_periodic_work,
 		ab8500_fg_periodic_work);
 
 	/* Work to check low battery condition */
-	INIT_DELAYED_WORK_DEFERRABLE(&di->fg_low_bat_work,
+	INIT_DEFERRABLE_WORK(&di->fg_low_bat_work,
 		ab8500_fg_low_bat_work);
 
 	/* Init work for HW failure check */
-	INIT_DELAYED_WORK_DEFERRABLE(&di->fg_check_hw_failure_work,
+	INIT_DEFERRABLE_WORK(&di->fg_check_hw_failure_work,
 		ab8500_fg_check_hw_failure_work);
 
 	/* Initialize OVV, and other registers */

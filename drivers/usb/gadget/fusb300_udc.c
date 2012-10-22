@@ -203,7 +203,7 @@ static int config_ep(struct fusb300_ep *ep,
 	struct fusb300 *fusb300 = ep->fusb300;
 	struct fusb300_ep_info info;
 
-	ep->desc = desc;
+	ep->ep.desc = desc;
 
 	info.interval = 0;
 	info.addrofs = 0;
@@ -443,7 +443,7 @@ static int fusb300_queue(struct usb_ep *_ep, struct usb_request *_req,
 	req->req.actual = 0;
 	req->req.status = -EINPROGRESS;
 
-	if (ep->desc == NULL) /* ep0 */
+	if (ep->ep.desc == NULL) /* ep0 */
 		ep0_queue(ep, req);
 	else if (request && !ep->stall)
 		enable_fifo_int(ep);
@@ -1311,7 +1311,7 @@ static void init_controller(struct fusb300 *fusb300)
 static struct fusb300 *the_controller;
 
 static int fusb300_udc_start(struct usb_gadget_driver *driver,
-		int (*bind)(struct usb_gadget *))
+		int (*bind)(struct usb_gadget *, struct usb_gadget_driver *))
 {
 	struct fusb300 *fusb300 = the_controller;
 	int retval;
@@ -1339,7 +1339,7 @@ static int fusb300_udc_start(struct usb_gadget_driver *driver,
 		goto error;
 	}
 
-	retval = bind(&fusb300->gadget);
+	retval = bind(&fusb300->gadget, driver);
 	if (retval) {
 		pr_err("bind to driver error (%d)\n", retval);
 		device_del(&fusb300->gadget.dev);

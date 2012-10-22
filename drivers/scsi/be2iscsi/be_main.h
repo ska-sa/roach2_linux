@@ -24,6 +24,8 @@
 #include <linux/pci.h>
 #include <linux/if_ether.h>
 #include <linux/in.h>
+#include <linux/ctype.h>
+#include <linux/module.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
@@ -34,9 +36,9 @@
 
 #include "be.h"
 #define DRV_NAME		"be2iscsi"
-#define BUILD_STR		"4.1.239.0"
-#define BE_NAME			"ServerEngines BladeEngine2" \
-				"Linux iSCSI Driver version" BUILD_STR
+#define BUILD_STR		"4.4.58.0"
+#define BE_NAME			"Emulex OneConnect" \
+				"Open-iSCSI Driver version" BUILD_STR
 #define DRV_DESC		BE_NAME " " "Driver"
 
 #define BE_VENDOR_ID		0x19A2
@@ -84,23 +86,7 @@
 #define MAX_CMD_SZ			65536
 #define IIOC_SCSI_DATA                  0x05	/* Write Operation */
 
-#define DBG_LVL				0x00000001
-#define DBG_LVL_1			0x00000001
-#define DBG_LVL_2			0x00000002
-#define DBG_LVL_3			0x00000004
-#define DBG_LVL_4			0x00000008
-#define DBG_LVL_5			0x00000010
-#define DBG_LVL_6			0x00000020
-#define DBG_LVL_7			0x00000040
-#define DBG_LVL_8			0x00000080
-
-#define SE_DEBUG(debug_mask, fmt, args...)		\
-do {							\
-	if (debug_mask & DBG_LVL) {			\
-		printk(KERN_ERR "(%s():%d):", __func__, __LINE__);\
-		printk(fmt, ##args);			\
-	}						\
-} while (0);
+#define INVALID_SESS_HANDLE	0xFFFFFFFF
 
 #define BE_ADAPTER_UP		0x00000000
 #define BE_ADAPTER_LINK_DOWN	0x00000001
@@ -316,6 +302,8 @@ struct beiscsi_hba {
 	struct iscsi_endpoint **ep_array;
 	struct iscsi_boot_kset *boot_kset;
 	struct Scsi_Host *shost;
+	struct iscsi_iface *ipv4_iface;
+	struct iscsi_iface *ipv6_iface;
 	struct {
 		/**
 		 * group together since they are used most frequently
@@ -345,9 +333,11 @@ struct beiscsi_hba {
 	struct work_struct work_cqs;	/* The work being queued */
 	struct be_ctrl_info ctrl;
 	unsigned int generation;
-	unsigned int read_mac_address;
+	unsigned int interface_handle;
 	struct mgmt_session_info boot_sess;
 	struct invalidate_command_table inv_tbl[128];
+
+	unsigned int attr_log_enable;
 
 };
 
@@ -525,8 +515,6 @@ struct hwi_async_pdu_context {
 
 		unsigned int free_entries;
 		unsigned int busy_entries;
-		unsigned int buffer_size;
-		unsigned int num_entries;
 
 		struct list_head free_list;
 	} async_header;
@@ -543,10 +531,11 @@ struct hwi_async_pdu_context {
 
 		unsigned int free_entries;
 		unsigned int busy_entries;
-		unsigned int buffer_size;
 		struct list_head free_list;
-		unsigned int num_entries;
 	} async_data;
+
+	unsigned int buffer_size;
+	unsigned int num_entries;
 
 	/**
 	 * This is a varying size list! Do not add anything
@@ -858,5 +847,21 @@ struct hwi_context_memory {
 
 	struct hwi_async_pdu_context *pasync_ctx;
 };
+
+/* Logging related definitions */
+#define BEISCSI_LOG_INIT	0x0001	/* Initialization events */
+#define BEISCSI_LOG_MBOX	0x0002	/* Mailbox Events */
+#define BEISCSI_LOG_MISC	0x0004	/* Miscllaneous Events */
+#define BEISCSI_LOG_EH		0x0008	/* Error Handler */
+#define BEISCSI_LOG_IO		0x0010	/* IO Code Path */
+#define BEISCSI_LOG_CONFIG	0x0020	/* CONFIG Code Path */
+
+#define beiscsi_log(phba, level, mask, fmt, arg...) \
+do { \
+	uint32_t log_value = phba->attr_log_enable; \
+		if (((mask) & log_value) || (level[1] <= '3')) \
+			shost_printk(level, phba->shost, \
+				     fmt, __LINE__, ##arg); \
+} while (0)
 
 #endif

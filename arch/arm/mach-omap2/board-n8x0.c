@@ -20,19 +20,16 @@
 #include <linux/i2c.h>
 #include <linux/spi/spi.h>
 #include <linux/usb/musb.h>
+#include <linux/platform_data/spi-omap2-mcspi.h>
+#include <linux/platform_data/mtd-onenand-omap2.h>
 #include <sound/tlv320aic3x.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach-types.h>
 
-#include <plat/board.h>
 #include "common.h"
 #include <plat/menelaus.h>
-#include <mach/irqs.h>
-#include <plat/mcspi.h>
-#include <plat/onenand.h>
 #include <plat/mmc.h>
-#include <plat/serial.h>
 
 #include "mux.h"
 
@@ -83,11 +80,9 @@ static struct musb_hdrc_config musb_config = {
 };
 
 static struct musb_hdrc_platform_data tusb_data = {
-#if defined(CONFIG_USB_MUSB_OTG)
+#ifdef CONFIG_USB_GADGET_MUSB_HDRC
 	.mode		= MUSB_OTG,
-#elif defined(CONFIG_USB_MUSB_PERIPHERAL)
-	.mode		= MUSB_PERIPHERAL,
-#else /* defined(CONFIG_USB_MUSB_HOST) */
+#else
 	.mode		= MUSB_HOST,
 #endif
 	.set_power	= tusb_set_power,
@@ -470,7 +465,6 @@ static struct omap_mmc_platform_data mmc1_data = {
 	.cleanup			= n8x0_mmc_cleanup,
 	.shutdown			= n8x0_mmc_shutdown,
 	.max_freq			= 24000000,
-	.dma_mask			= 0xffffffff,
 	.slots[0] = {
 		.wires			= 4,
 		.set_power		= n8x0_mmc_set_power,
@@ -556,8 +550,8 @@ static int n8x0_auto_sleep_regulators(void)
 
 	ret = menelaus_set_regulator_sleep(1, val);
 	if (ret < 0) {
-		printk(KERN_ERR "Could not set regulators to sleep on "
-			"menelaus: %u\n", ret);
+		pr_err("Could not set regulators to sleep on menelaus: %u\n",
+		       ret);
 		return ret;
 	}
 	return 0;
@@ -569,8 +563,7 @@ static int n8x0_auto_voltage_scale(void)
 
 	ret = menelaus_set_vcore_hw(1400, 1050);
 	if (ret < 0) {
-		printk(KERN_ERR "Could not set VCORE voltage on "
-			"menelaus: %u\n", ret);
+		pr_err("Could not set VCORE voltage on menelaus: %u\n", ret);
 		return ret;
 	}
 	return 0;
@@ -603,7 +596,7 @@ static struct menelaus_platform_data n8x0_menelaus_platform_data __initdata = {
 static struct i2c_board_info __initdata n8x0_i2c_board_info_1[] __initdata = {
 	{
 		I2C_BOARD_INFO("menelaus", 0x72),
-		.irq = INT_24XX_SYS_NIRQ,
+		.irq = 7 + OMAP_INTC_START,
 		.platform_data = &n8x0_menelaus_platform_data,
 	},
 };
@@ -694,6 +687,7 @@ MACHINE_START(NOKIA_N800, "Nokia N800")
 	.init_irq	= omap2_init_irq,
 	.handle_irq	= omap2_intc_handle_irq,
 	.init_machine	= n8x0_init_machine,
+	.init_late	= omap2420_init_late,
 	.timer		= &omap2_timer,
 	.restart	= omap_prcm_restart,
 MACHINE_END
@@ -706,6 +700,7 @@ MACHINE_START(NOKIA_N810, "Nokia N810")
 	.init_irq	= omap2_init_irq,
 	.handle_irq	= omap2_intc_handle_irq,
 	.init_machine	= n8x0_init_machine,
+	.init_late	= omap2420_init_late,
 	.timer		= &omap2_timer,
 	.restart	= omap_prcm_restart,
 MACHINE_END
@@ -718,6 +713,7 @@ MACHINE_START(NOKIA_N810_WIMAX, "Nokia N810 WiMAX")
 	.init_irq	= omap2_init_irq,
 	.handle_irq	= omap2_intc_handle_irq,
 	.init_machine	= n8x0_init_machine,
+	.init_late	= omap2420_init_late,
 	.timer		= &omap2_timer,
 	.restart	= omap_prcm_restart,
 MACHINE_END

@@ -29,18 +29,16 @@
 struct i2c_board_info;
 struct isp_device;
 
+#define ISP_XCLK_NONE			0
+#define ISP_XCLK_A			1
+#define ISP_XCLK_B			2
+
 enum isp_interface_type {
 	ISP_INTERFACE_PARALLEL,
 	ISP_INTERFACE_CSI2A_PHY2,
 	ISP_INTERFACE_CCP2B_PHY1,
 	ISP_INTERFACE_CCP2B_PHY2,
 	ISP_INTERFACE_CSI2C_PHY1,
-};
-
-enum {
-	ISP_BRIDGE_DISABLE = 0,
-	ISP_BRIDGE_LITTLE_ENDIAN = 2,
-	ISP_BRIDGE_BIG_ENDIAN = 3,
 };
 
 enum {
@@ -63,17 +61,15 @@ enum {
  *		0 - Active high, 1 - Active low
  * @vs_pol: Vertical synchronization polarity
  *		0 - Active high, 1 - Active low
- * @bridge: CCDC Bridge input control
- *		ISP_BRIDGE_DISABLE - Disable
- *		ISP_BRIDGE_LITTLE_ENDIAN - Little endian
- *		ISP_BRIDGE_BIG_ENDIAN - Big endian
+ * @data_pol: Data polarity
+ *		0 - Normal, 1 - One's complement
  */
 struct isp_parallel_platform_data {
 	unsigned int data_lane_shift:2;
 	unsigned int clk_pol:1;
 	unsigned int hs_pol:1;
 	unsigned int vs_pol:1;
-	unsigned int bridge:2;
+	unsigned int data_pol:1;
 };
 
 enum {
@@ -84,6 +80,29 @@ enum {
 enum {
 	ISP_CCP2_MODE_MIPI = 0,
 	ISP_CCP2_MODE_CCP2 = 1,
+};
+
+/**
+ * struct isp_csiphy_lane: CCP2/CSI2 lane position and polarity
+ * @pos: position of the lane
+ * @pol: polarity of the lane
+ */
+struct isp_csiphy_lane {
+	u8 pos;
+	u8 pol;
+};
+
+#define ISP_CSIPHY1_NUM_DATA_LANES	1
+#define ISP_CSIPHY2_NUM_DATA_LANES	2
+
+/**
+ * struct isp_csiphy_lanes_cfg - CCP2/CSI2 lane configuration
+ * @data: Configuration of one or two data lanes
+ * @clk: Clock lane configuration
+ */
+struct isp_csiphy_lanes_cfg {
+	struct isp_csiphy_lane data[ISP_CSIPHY2_NUM_DATA_LANES];
+	struct isp_csiphy_lane clk;
 };
 
 /**
@@ -105,6 +124,7 @@ struct isp_ccp2_platform_data {
 	unsigned int ccp2_mode:1;
 	unsigned int phy_layer:1;
 	unsigned int vpclk_div:2;
+	struct isp_csiphy_lanes_cfg lanecfg;
 };
 
 /**
@@ -115,6 +135,7 @@ struct isp_ccp2_platform_data {
 struct isp_csi2_platform_data {
 	unsigned crc:1;
 	unsigned vpclk_div:2;
+	struct isp_csiphy_lanes_cfg lanecfg;
 };
 
 struct isp_subdev_i2c_board_info {

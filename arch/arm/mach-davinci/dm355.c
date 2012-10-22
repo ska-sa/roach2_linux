@@ -26,13 +26,13 @@
 #include <mach/time.h>
 #include <mach/serial.h>
 #include <mach/common.h>
-#include <mach/asp.h>
-#include <mach/spi.h>
+#include <linux/platform_data/spi-davinci.h>
 #include <mach/gpio-davinci.h>
 
 #include "davinci.h"
 #include "clock.h"
 #include "mux.h"
+#include "asp.h"
 
 #define DM355_UART2_BASE	(IO_PHYS + 0x206000)
 
@@ -424,7 +424,7 @@ static struct platform_device dm355_spi0_device = {
 };
 
 void __init dm355_init_spi0(unsigned chipselect_mask,
-		struct spi_board_info *info, unsigned len)
+		const struct spi_board_info *info, unsigned len)
 {
 	/* for now, assume we need MISO */
 	davinci_cfg_reg(DM355_SPI0_SDI);

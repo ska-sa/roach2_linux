@@ -18,6 +18,8 @@
  *  use the vDSO.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/time.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -26,7 +28,7 @@
 #include <linux/jiffies.h>
 #include <linux/sysctl.h>
 #include <linux/topology.h>
-#include <linux/clocksource.h>
+#include <linux/timekeeper_internal.h>
 #include <linux/getcpu.h>
 #include <linux/cpu.h>
 #include <linux/smp.h>
@@ -80,49 +82,53 @@ void update_vsyscall_tz(void)
 	vsyscall_gtod_data.sys_tz = sys_tz;
 }
 
-void update_vsyscall(struct timespec *wall_time, struct timespec *wtm,
-			struct clocksource *clock, u32 mult)
+void update_vsyscall(struct timekeeper *tk)
 {
-	struct timespec monotonic;
+	struct vsyscall_gtod_data *vdata = &vsyscall_gtod_data;
 
-	write_seqcount_begin(&vsyscall_gtod_data.seq);
+	write_seqcount_begin(&vdata->seq);
 
 	/* copy vsyscall data */
-	vsyscall_gtod_data.clock.vclock_mode	= clock->archdata.vclock_mode;
-	vsyscall_gtod_data.clock.cycle_last	= clock->cycle_last;
-	vsyscall_gtod_data.clock.mask		= clock->mask;
-	vsyscall_gtod_data.clock.mult		= mult;
-	vsyscall_gtod_data.clock.shift		= clock->shift;
+	vdata->clock.vclock_mode	= tk->clock->archdata.vclock_mode;
+	vdata->clock.cycle_last		= tk->clock->cycle_last;
+	vdata->clock.mask		= tk->clock->mask;
+	vdata->clock.mult		= tk->mult;
+	vdata->clock.shift		= tk->shift;
 
-	vsyscall_gtod_data.wall_time_sec	= wall_time->tv_sec;
-	vsyscall_gtod_data.wall_time_nsec	= wall_time->tv_nsec;
+	vdata->wall_time_sec		= tk->xtime_sec;
+	vdata->wall_time_snsec		= tk->xtime_nsec;
 
-	monotonic = timespec_add(*wall_time, *wtm);
-	vsyscall_gtod_data.monotonic_time_sec	= monotonic.tv_sec;
-	vsyscall_gtod_data.monotonic_time_nsec	= monotonic.tv_nsec;
+	vdata->monotonic_time_sec	= tk->xtime_sec
+					+ tk->wall_to_monotonic.tv_sec;
+	vdata->monotonic_time_snsec	= tk->xtime_nsec
+					+ (tk->wall_to_monotonic.tv_nsec
+						<< tk->shift);
+	while (vdata->monotonic_time_snsec >=
+					(((u64)NSEC_PER_SEC) << tk->shift)) {
+		vdata->monotonic_time_snsec -=
+					((u64)NSEC_PER_SEC) << tk->shift;
+		vdata->monotonic_time_sec++;
+	}
 
-	vsyscall_gtod_data.wall_time_coarse	= __current_kernel_time();
-	vsyscall_gtod_data.monotonic_time_coarse =
-		timespec_add(vsyscall_gtod_data.wall_time_coarse, *wtm);
+	vdata->wall_time_coarse.tv_sec	= tk->xtime_sec;
+	vdata->wall_time_coarse.tv_nsec	= (long)(tk->xtime_nsec >> tk->shift);
 
-	write_seqcount_end(&vsyscall_gtod_data.seq);
+	vdata->monotonic_time_coarse	= timespec_add(vdata->wall_time_coarse,
+							tk->wall_to_monotonic);
+
+	write_seqcount_end(&vdata->seq);
 }
 
 static void warn_bad_vsyscall(const char *level, struct pt_regs *regs,
 			      const char *message)
 {
-	static DEFINE_RATELIMIT_STATE(rs, DEFAULT_RATELIMIT_INTERVAL, DEFAULT_RATELIMIT_BURST);
-	struct task_struct *tsk;
-
-	if (!show_unhandled_signals || !__ratelimit(&rs))
+	if (!show_unhandled_signals)
 		return;
 
-	tsk = current;
-
-	printk("%s%s[%d] %s ip:%lx cs:%lx sp:%lx ax:%lx si:%lx di:%lx\n",
-	       level, tsk->comm, task_pid_nr(tsk),
-	       message, regs->ip, regs->cs,
-	       regs->sp, regs->ax, regs->si, regs->di);
+	pr_notice_ratelimited("%s%s[%d] %s ip:%lx cs:%lx sp:%lx ax:%lx si:%lx di:%lx\n",
+			      level, current->comm, task_pid_nr(current),
+			      message, regs->ip, regs->cs,
+			      regs->sp, regs->ax, regs->si, regs->di);
 }
 
 static int addr_to_vsyscall_nr(unsigned long addr)
@@ -138,6 +144,19 @@ static int addr_to_vsyscall_nr(unsigned long addr)
 
 	return nr;
 }
+
+#ifdef CONFIG_SECCOMP
+static int vsyscall_seccomp(struct task_struct *tsk, int syscall_nr)
+{
+	if (!seccomp_mode(&tsk->seccomp))
+		return 0;
+	task_pt_regs(tsk)->orig_ax = syscall_nr;
+	task_pt_regs(tsk)->ax = syscall_nr;
+	return __secure_computing(syscall_nr);
+}
+#else
+#define vsyscall_seccomp(_tsk, _nr) 0
+#endif
 
 static bool write_ok_or_segv(unsigned long ptr, size_t size)
 {
@@ -174,6 +193,7 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 	int vsyscall_nr;
 	int prev_sig_on_uaccess_error;
 	long ret;
+	int skip;
 
 	/*
 	 * No point in checking CS -- the only way to get here is a user mode
@@ -205,9 +225,6 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 	}
 
 	tsk = current;
-	if (seccomp_mode(&tsk->seccomp))
-		do_exit(SIGKILL);
-
 	/*
 	 * With a real vsyscall, page faults cause SIGSEGV.  We want to
 	 * preserve that behavior to make writing exploits harder.
@@ -222,8 +239,13 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 	 * address 0".
 	 */
 	ret = -EFAULT;
+	skip = 0;
 	switch (vsyscall_nr) {
 	case 0:
+		skip = vsyscall_seccomp(tsk, __NR_gettimeofday);
+		if (skip)
+			break;
+
 		if (!write_ok_or_segv(regs->di, sizeof(struct timeval)) ||
 		    !write_ok_or_segv(regs->si, sizeof(struct timezone)))
 			break;
@@ -234,6 +256,10 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 		break;
 
 	case 1:
+		skip = vsyscall_seccomp(tsk, __NR_time);
+		if (skip)
+			break;
+
 		if (!write_ok_or_segv(regs->di, sizeof(time_t)))
 			break;
 
@@ -241,6 +267,10 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 		break;
 
 	case 2:
+		skip = vsyscall_seccomp(tsk, __NR_getcpu);
+		if (skip)
+			break;
+
 		if (!write_ok_or_segv(regs->di, sizeof(unsigned)) ||
 		    !write_ok_or_segv(regs->si, sizeof(unsigned)))
 			break;
@@ -252,6 +282,12 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 	}
 
 	current_thread_info()->sig_on_uaccess_error = prev_sig_on_uaccess_error;
+
+	if (skip) {
+		if ((long)regs->ax <= 0L) /* seccomp errno emulation */
+			goto do_ret;
+		goto done; /* seccomp trace/trap */
+	}
 
 	if (ret == -EFAULT) {
 		/* Bad news -- userspace fed a bad pointer to a vsyscall. */
@@ -271,10 +307,11 @@ bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 
 	regs->ax = ret;
 
+do_ret:
 	/* Emulate a ret instruction. */
 	regs->ip = caller;
 	regs->sp += 8;
-
+done:
 	return true;
 
 sigsegv:

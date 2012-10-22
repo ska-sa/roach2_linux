@@ -16,8 +16,8 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/rtc.h>
-#include "../iio.h"
-#include "../trigger.h"
+#include <linux/iio/iio.h>
+#include <linux/iio/trigger.h>
 
 static LIST_HEAD(iio_prtc_trigger_list);
 static DEFINE_MUTEX(iio_prtc_trigger_list_lock);
@@ -41,7 +41,7 @@ static ssize_t iio_trig_periodic_read_freq(struct device *dev,
 					   struct device_attribute *attr,
 					   char *buf)
 {
-	struct iio_trigger *trig = dev_get_drvdata(dev);
+	struct iio_trigger *trig = to_iio_trigger(dev);
 	struct iio_prtc_trigger_info *trig_info = trig->private_data;
 	return sprintf(buf, "%u\n", trig_info->frequency);
 }
@@ -51,7 +51,7 @@ static ssize_t iio_trig_periodic_write_freq(struct device *dev,
 					    const char *buf,
 					    size_t len)
 {
-	struct iio_trigger *trig = dev_get_drvdata(dev);
+	struct iio_trigger *trig = to_iio_trigger(dev);
 	struct iio_prtc_trigger_info *trig_info = trig->private_data;
 	unsigned long val;
 	int ret;
@@ -101,7 +101,7 @@ static const struct iio_trigger_ops iio_prtc_trigger_ops = {
 	.set_trigger_state = &iio_trig_periodic_rtc_set_state,
 };
 
-static int iio_trig_periodic_rtc_probe(struct platform_device *dev)
+static int __devinit iio_trig_periodic_rtc_probe(struct platform_device *dev)
 {
 	char **pdata = dev->dev.platform_data;
 	struct iio_prtc_trigger_info *trig_info;
@@ -112,7 +112,7 @@ static int iio_trig_periodic_rtc_probe(struct platform_device *dev)
 	for (i = 0;; i++) {
 		if (pdata[i] == NULL)
 			break;
-		trig = iio_allocate_trigger("periodic%s", pdata[i]);
+		trig = iio_trigger_alloc("periodic%s", pdata[i]);
 		if (!trig) {
 			ret = -ENOMEM;
 			goto error_free_completed_registrations;
@@ -152,7 +152,7 @@ error_free_trig_info:
 	kfree(trig_info);
 error_put_trigger_and_remove_from_list:
 	list_del(&trig->alloc_list);
-	iio_put_trigger(trig);
+	iio_trigger_put(trig);
 error_free_completed_registrations:
 	list_for_each_entry_safe(trig,
 				 trig2,
@@ -167,7 +167,7 @@ error_free_completed_registrations:
 	return ret;
 }
 
-static int iio_trig_periodic_rtc_remove(struct platform_device *dev)
+static int __devexit iio_trig_periodic_rtc_remove(struct platform_device *dev)
 {
 	struct iio_trigger *trig, *trig2;
 	struct iio_prtc_trigger_info *trig_info;
@@ -188,7 +188,7 @@ static int iio_trig_periodic_rtc_remove(struct platform_device *dev)
 
 static struct platform_driver iio_trig_periodic_rtc_driver = {
 	.probe = iio_trig_periodic_rtc_probe,
-	.remove = iio_trig_periodic_rtc_remove,
+	.remove = __devexit_p(iio_trig_periodic_rtc_remove),
 	.driver = {
 		.name = "iio_prtc_trigger",
 		.owner = THIS_MODULE,
@@ -197,6 +197,6 @@ static struct platform_driver iio_trig_periodic_rtc_driver = {
 
 module_platform_driver(iio_trig_periodic_rtc_driver);
 
-MODULE_AUTHOR("Jonathan Cameron <jic23@cam.ac.uk>");
+MODULE_AUTHOR("Jonathan Cameron <jic23@kernel.org>");
 MODULE_DESCRIPTION("Periodic realtime clock  trigger for the iio subsystem");
 MODULE_LICENSE("GPL v2");

@@ -134,7 +134,7 @@ __BUILD_MEMORY_STRING(__raw_, q, u64)
  * load/store instructions. sh_io_port_base is the virtual address to
  * which all ports are being mapped.
  */
-extern const unsigned long sh_io_port_base;
+extern unsigned long sh_io_port_base;
 
 static inline void __set_io_port_base(unsigned long pbase)
 {
@@ -218,7 +218,12 @@ __BUILD_IOPORT_STRING(w, u16)
 __BUILD_IOPORT_STRING(l, u32)
 __BUILD_IOPORT_STRING(q, u64)
 
+#else /* !CONFIG_HAS_IOPORT */
+
+#include <asm/io_noioport.h>
+
 #endif
+
 
 #define IO_SPACE_LIMIT 0xffffffff
 

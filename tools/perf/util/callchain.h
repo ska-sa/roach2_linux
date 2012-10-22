@@ -58,7 +58,7 @@ struct callchain_list {
 /*
  * A callchain cursor is a single linked list that
  * let one feed a callchain progressively.
- * It keeps persitent allocated entries to minimize
+ * It keeps persistent allocated entries to minimize
  * allocations.
  */
 struct callchain_cursor_node {
@@ -75,6 +75,8 @@ struct callchain_cursor {
 	u64				pos;
 	struct callchain_cursor_node	*curr;
 };
+
+extern __thread struct callchain_cursor callchain_cursor;
 
 static inline void callchain_init(struct callchain_root *root)
 {

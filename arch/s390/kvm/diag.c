@@ -1,7 +1,7 @@
 /*
- * diag.c - handling diagnose instructions
+ * handling diagnose instructions
  *
- * Copyright IBM Corp. 2008,2011
+ * Copyright IBM Corp. 2008, 2011
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License (version 2 only)
@@ -14,6 +14,8 @@
 #include <linux/kvm.h>
 #include <linux/kvm_host.h>
 #include "kvm-s390.h"
+#include "trace.h"
+#include "trace-s390.h"
 
 static int diag_release_pages(struct kvm_vcpu *vcpu)
 {
@@ -47,9 +49,30 @@ static int __diag_time_slice_end(struct kvm_vcpu *vcpu)
 {
 	VCPU_EVENT(vcpu, 5, "%s", "diag time slice end");
 	vcpu->stat.diagnose_44++;
-	vcpu_put(vcpu);
-	yield();
-	vcpu_load(vcpu);
+	kvm_vcpu_on_spin(vcpu);
+	return 0;
+}
+
+static int __diag_time_slice_end_directed(struct kvm_vcpu *vcpu)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct kvm_vcpu *tcpu;
+	int tid;
+	int i;
+
+	tid = vcpu->run->s.regs.gprs[(vcpu->arch.sie_block->ipa & 0xf0) >> 4];
+	vcpu->stat.diagnose_9c++;
+	VCPU_EVENT(vcpu, 5, "diag time slice end directed to %d", tid);
+
+	if (tid == vcpu->vcpu_id)
+		return 0;
+
+	kvm_for_each_vcpu(i, tcpu, kvm)
+		if (tcpu->vcpu_id == tid) {
+			kvm_vcpu_yield_to(tcpu);
+			break;
+		}
+
 	return 0;
 }
 
@@ -77,6 +100,7 @@ static int __diag_ipl_functions(struct kvm_vcpu *vcpu)
 	vcpu->run->exit_reason = KVM_EXIT_S390_RESET;
 	VCPU_EVENT(vcpu, 3, "requesting userspace resets %llx",
 	  vcpu->run->s390_reset_flags);
+	trace_kvm_s390_request_resets(vcpu->run->s390_reset_flags);
 	return -EREMOTE;
 }
 
@@ -84,11 +108,14 @@ int kvm_s390_handle_diag(struct kvm_vcpu *vcpu)
 {
 	int code = (vcpu->arch.sie_block->ipb & 0xfff0000) >> 16;
 
+	trace_kvm_s390_handle_diag(vcpu, code);
 	switch (code) {
 	case 0x10:
 		return diag_release_pages(vcpu);
 	case 0x44:
 		return __diag_time_slice_end(vcpu);
+	case 0x9c:
+		return __diag_time_slice_end_directed(vcpu);
 	case 0x308:
 		return __diag_ipl_functions(vcpu);
 	default:

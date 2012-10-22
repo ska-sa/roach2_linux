@@ -272,30 +272,6 @@ static void brcmf_netdev_set_multicast_list(struct net_device *ndev)
 	schedule_work(&drvr->multicast_work);
 }
 
-int brcmf_sendpkt(struct brcmf_pub *drvr, int ifidx, struct sk_buff *pktbuf)
-{
-	/* Reject if down */
-	if (!drvr->bus_if->drvr_up || (drvr->bus_if->state == BRCMF_BUS_DOWN))
-		return -ENODEV;
-
-	/* Update multicast statistic */
-	if (pktbuf->len >= ETH_ALEN) {
-		u8 *pktdata = (u8 *) (pktbuf->data);
-		struct ethhdr *eh = (struct ethhdr *)pktdata;
-
-		if (is_multicast_ether_addr(eh->h_dest))
-			drvr->tx_multicast++;
-		if (ntohs(eh->h_proto) == ETH_P_PAE)
-			atomic_inc(&drvr->pend_8021x_cnt);
-	}
-
-	/* If the protocol uses a data header, apply it */
-	brcmf_proto_hdrpush(drvr, ifidx, pktbuf);
-
-	/* Use bus module to send data frame */
-	return drvr->bus_if->brcmf_bus_txdata(drvr->dev, pktbuf);
-}
-
 static int brcmf_netdev_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	int ret;
@@ -338,7 +314,22 @@ static int brcmf_netdev_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		}
 	}
 
-	ret = brcmf_sendpkt(drvr, ifp->idx, skb);
+	/* Update multicast statistic */
+	if (skb->len >= ETH_ALEN) {
+		u8 *pktdata = (u8 *)(skb->data);
+		struct ethhdr *eh = (struct ethhdr *)pktdata;
+
+		if (is_multicast_ether_addr(eh->h_dest))
+			drvr->tx_multicast++;
+		if (ntohs(eh->h_proto) == ETH_P_PAE)
+			atomic_inc(&drvr->pend_8021x_cnt);
+	}
+
+	/* If the protocol uses a data header, apply it */
+	brcmf_proto_hdrpush(drvr, ifp->idx, skb);
+
+	/* Use bus module to send data frame */
+	ret =  drvr->bus_if->brcmf_bus_txdata(drvr->dev, skb);
 
 done:
 	if (ret)
@@ -350,19 +341,23 @@ done:
 	return 0;
 }
 
-void brcmf_txflowcontrol(struct device *dev, int ifidx, bool state)
+void brcmf_txflowblock(struct device *dev, bool state)
 {
 	struct net_device *ndev;
 	struct brcmf_bus *bus_if = dev_get_drvdata(dev);
 	struct brcmf_pub *drvr = bus_if->drvr;
+	int i;
 
 	brcmf_dbg(TRACE, "Enter\n");
 
-	ndev = drvr->iflist[ifidx]->ndev;
-	if (state == ON)
-		netif_stop_queue(ndev);
-	else
-		netif_wake_queue(ndev);
+	for (i = 0; i < BRCMF_MAX_IFS; i++)
+		if (drvr->iflist[i]) {
+			ndev = drvr->iflist[i]->ndev;
+			if (state)
+				netif_stop_queue(ndev);
+			else
+				netif_wake_queue(ndev);
+		}
 }
 
 static int brcmf_host_event(struct brcmf_pub *drvr, int *ifidx,
@@ -775,6 +770,14 @@ done:
 	return err;
 }
 
+int brcmf_netlink_dcmd(struct net_device *ndev, struct brcmf_dcmd *dcmd)
+{
+	brcmf_dbg(TRACE, "enter: cmd %x buf %p len %d\n",
+		  dcmd->cmd, dcmd->buf, dcmd->len);
+
+	return brcmf_exec_dcmd(ndev, dcmd->cmd, dcmd->buf, dcmd->len);
+}
+
 static int brcmf_netdev_stop(struct net_device *ndev)
 {
 	struct brcmf_if *ifp = netdev_priv(ndev);
@@ -799,6 +802,7 @@ static int brcmf_netdev_open(struct net_device *ndev)
 	struct brcmf_bus *bus_if = drvr->bus_if;
 	u32 toe_ol;
 	s32 ret = 0;
+	uint up = 0;
 
 	brcmf_dbg(TRACE, "ifidx %d\n", ifp->idx);
 
@@ -822,6 +826,10 @@ static int brcmf_netdev_open(struct net_device *ndev)
 			drvr->iflist[ifp->idx]->ndev->features &=
 				~NETIF_F_IP_CSUM;
 	}
+
+	/* make sure RF is ready for work */
+	brcmf_proto_cdc_set_dcmd(drvr, 0, BRCMF_C_UP, (char *)&up, sizeof(up));
+
 	/* Allow transmit calls */
 	netif_start_queue(ndev);
 	drvr->bus_if->drvr_up = true;
@@ -842,6 +850,63 @@ static const struct net_device_ops brcmf_netdev_ops_pri = {
 	.ndo_set_mac_address = brcmf_netdev_set_mac_address,
 	.ndo_set_rx_mode = brcmf_netdev_set_multicast_list
 };
+
+static int brcmf_net_attach(struct brcmf_if *ifp)
+{
+	struct brcmf_pub *drvr = ifp->drvr;
+	struct net_device *ndev;
+	u8 temp_addr[ETH_ALEN];
+
+	brcmf_dbg(TRACE, "ifidx %d\n", ifp->idx);
+
+	ndev = drvr->iflist[ifp->idx]->ndev;
+	ndev->netdev_ops = &brcmf_netdev_ops_pri;
+
+	/*
+	 * determine mac address to use
+	 */
+	if (is_valid_ether_addr(ifp->mac_addr))
+		memcpy(temp_addr, ifp->mac_addr, ETH_ALEN);
+	else
+		memcpy(temp_addr, drvr->mac, ETH_ALEN);
+
+	if (ifp->idx == 1) {
+		brcmf_dbg(TRACE, "ACCESS POINT MAC:\n");
+		/*  ACCESSPOINT INTERFACE CASE */
+		temp_addr[0] |= 0X02;	/* set bit 2 ,
+			 - Locally Administered address  */
+
+	}
+	ndev->hard_header_len = ETH_HLEN + drvr->hdrlen;
+	ndev->ethtool_ops = &brcmf_ethtool_ops;
+
+	drvr->rxsz = ndev->mtu + ndev->hard_header_len +
+			      drvr->hdrlen;
+
+	memcpy(ndev->dev_addr, temp_addr, ETH_ALEN);
+
+	/* attach to cfg80211 for primary interface */
+	if (!ifp->idx) {
+		drvr->config = brcmf_cfg80211_attach(ndev, drvr->dev, drvr);
+		if (drvr->config == NULL) {
+			brcmf_dbg(ERROR, "wl_cfg80211_attach failed\n");
+			goto fail;
+		}
+	}
+
+	if (register_netdev(ndev) != 0) {
+		brcmf_dbg(ERROR, "couldn't register the net device\n");
+		goto fail;
+	}
+
+	brcmf_dbg(INFO, "%s: Broadcom Dongle Host Driver\n", ndev->name);
+
+	return 0;
+
+fail:
+	ndev->netdev_ops = NULL;
+	return -EBADE;
+}
 
 int
 brcmf_add_if(struct device *dev, int ifidx, char *name, u8 *mac_addr)
@@ -882,7 +947,7 @@ brcmf_add_if(struct device *dev, int ifidx, char *name, u8 *mac_addr)
 	if (mac_addr != NULL)
 		memcpy(&ifp->mac_addr, mac_addr, ETH_ALEN);
 
-	if (brcmf_net_attach(drvr, ifp->idx)) {
+	if (brcmf_net_attach(ifp)) {
 		brcmf_dbg(ERROR, "brcmf_net_attach failed");
 		free_netdev(ifp->ndev);
 		drvr->iflist[ifidx] = NULL;
@@ -945,6 +1010,9 @@ int brcmf_attach(uint bus_hdrlen, struct device *dev)
 	drvr->bus_if->drvr = drvr;
 	drvr->dev = dev;
 
+	/* create device debugfs folder */
+	brcmf_debugfs_attach(drvr);
+
 	/* Attach and link in the protocol */
 	ret = brcmf_proto_attach(drvr);
 	if (ret != 0) {
@@ -954,6 +1022,8 @@ int brcmf_attach(uint bus_hdrlen, struct device *dev)
 
 	INIT_WORK(&drvr->setmacaddr_work, _brcmf_set_mac_address);
 	INIT_WORK(&drvr->multicast_work, _brcmf_set_multicast_list);
+
+	INIT_LIST_HEAD(&drvr->bus_if->dcmd_list);
 
 	return ret;
 
@@ -1016,67 +1086,14 @@ int brcmf_bus_start(struct device *dev)
 	if (ret < 0)
 		return ret;
 
+	/* add primary networking interface */
+	ret = brcmf_add_if(dev, 0, "wlan%d", drvr->mac);
+	if (ret < 0)
+		return ret;
+
 	/* signal bus ready */
 	bus_if->state = BRCMF_BUS_DATA;
 	return 0;
-}
-
-int brcmf_net_attach(struct brcmf_pub *drvr, int ifidx)
-{
-	struct net_device *ndev;
-	u8 temp_addr[ETH_ALEN] = {
-		0x00, 0x90, 0x4c, 0x11, 0x22, 0x33};
-
-	brcmf_dbg(TRACE, "ifidx %d\n", ifidx);
-
-	ndev = drvr->iflist[ifidx]->ndev;
-	ndev->netdev_ops = &brcmf_netdev_ops_pri;
-
-	/*
-	 * We have to use the primary MAC for virtual interfaces
-	 */
-	if (ifidx != 0) {
-		/* for virtual interfaces use the primary MAC  */
-		memcpy(temp_addr, drvr->mac, ETH_ALEN);
-
-	}
-
-	if (ifidx == 1) {
-		brcmf_dbg(TRACE, "ACCESS POINT MAC:\n");
-		/*  ACCESSPOINT INTERFACE CASE */
-		temp_addr[0] |= 0X02;	/* set bit 2 ,
-			 - Locally Administered address  */
-
-	}
-	ndev->hard_header_len = ETH_HLEN + drvr->hdrlen;
-	ndev->ethtool_ops = &brcmf_ethtool_ops;
-
-	drvr->rxsz = ndev->mtu + ndev->hard_header_len +
-			      drvr->hdrlen;
-
-	memcpy(ndev->dev_addr, temp_addr, ETH_ALEN);
-
-	/* attach to cfg80211 for primary interface */
-	if (!ifidx) {
-		drvr->config = brcmf_cfg80211_attach(ndev, drvr->dev, drvr);
-		if (drvr->config == NULL) {
-			brcmf_dbg(ERROR, "wl_cfg80211_attach failed\n");
-			goto fail;
-		}
-	}
-
-	if (register_netdev(ndev) != 0) {
-		brcmf_dbg(ERROR, "couldn't register the net device\n");
-		goto fail;
-	}
-
-	brcmf_dbg(INFO, "%s: Broadcom Dongle Host Driver\n", ndev->name);
-
-	return 0;
-
-fail:
-	ndev->netdev_ops = NULL;
-	return -EBADE;
 }
 
 static void brcmf_bus_detach(struct brcmf_pub *drvr)
@@ -1114,6 +1131,7 @@ void brcmf_detach(struct device *dev)
 		brcmf_proto_detach(drvr);
 	}
 
+	brcmf_debugfs_detach(drvr);
 	bus_if->drvr = NULL;
 	kfree(drvr);
 }
@@ -1173,7 +1191,7 @@ exit:
 	kfree(buf);
 	/* close file before return */
 	if (fp)
-		filp_close(fp, current->files);
+		filp_close(fp, NULL);
 	/* restore previous address limit */
 	set_fs(old_fs);
 
@@ -1183,6 +1201,8 @@ exit:
 
 static void brcmf_driver_init(struct work_struct *work)
 {
+	brcmf_debugfs_init();
+
 #ifdef CONFIG_BRCMFMAC_SDIO
 	brcmf_sdio_init();
 #endif
@@ -1210,6 +1230,7 @@ static void __exit brcmfmac_module_exit(void)
 #ifdef CONFIG_BRCMFMAC_USB
 	brcmf_usb_exit();
 #endif
+	brcmf_debugfs_exit();
 }
 
 module_init(brcmfmac_module_init);

@@ -49,7 +49,6 @@ Devices: [JR3] PCI force sensor board (jr3_pci)
 #include <linux/slab.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
-#include "comedi_pci.h"
 #include "jr3_pci.h"
 
 #define PCI_VENDOR_ID_JR3 0x1762
@@ -58,28 +57,6 @@ Devices: [JR3] PCI force sensor board (jr3_pci)
 #define PCI_DEVICE_ID_JR3_2_CHANNEL 0x3112
 #define PCI_DEVICE_ID_JR3_3_CHANNEL 0x3113
 #define PCI_DEVICE_ID_JR3_4_CHANNEL 0x3114
-
-static int jr3_pci_attach(struct comedi_device *dev,
-			  struct comedi_devconfig *it);
-static int jr3_pci_detach(struct comedi_device *dev);
-
-static struct comedi_driver driver_jr3_pci = {
-	.driver_name = "jr3_pci",
-	.module = THIS_MODULE,
-	.attach = jr3_pci_attach,
-	.detach = jr3_pci_detach,
-};
-
-static DEFINE_PCI_DEVICE_TABLE(jr3_pci_pci_table) = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL_NEW) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_2_CHANNEL) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_3_CHANNEL) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_4_CHANNEL) },
-	{0}
-};
-
-MODULE_DEVICE_TABLE(pci, jr3_pci_pci_table);
 
 struct jr3_pci_dev_private {
 
@@ -372,23 +349,24 @@ static int jr3_pci_open(struct comedi_device *dev)
 	int i;
 	struct jr3_pci_dev_private *devpriv = dev->private;
 
-	dev_dbg(dev->hw_dev, "jr3_pci_open\n");
+	dev_dbg(dev->class_dev, "jr3_pci_open\n");
 	for (i = 0; i < devpriv->n_channels; i++) {
 		struct jr3_pci_subdev_private *p;
 
 		p = dev->subdevices[i].private;
 		if (p) {
-			dev_dbg(dev->hw_dev, "serial: %p %d (%d)\n", p,
+			dev_dbg(dev->class_dev, "serial: %p %d (%d)\n", p,
 				p->serial_no, p->channel_no);
 		}
 	}
 	return 0;
 }
 
-int read_idm_word(const u8 * data, size_t size, int *pos, unsigned int *val)
+static int read_idm_word(const u8 *data, size_t size, int *pos,
+			 unsigned int *val)
 {
 	int result = 0;
-	if (pos != 0 && val != 0) {
+	if (pos && val) {
 		/*  Skip over non hex */
 		for (; *pos < size && !isxdigit(data[*pos]); (*pos)++) {
 		}
@@ -457,7 +435,8 @@ static int jr3_download_firmware(struct comedi_device *dev, const u8 * data,
 					break;
 				more = more
 				    && read_idm_word(data, size, &pos, &addr);
-				dev_dbg(dev->hw_dev, "Loading#%d %4.4x bytes at %4.4x\n",
+				dev_dbg(dev->class_dev,
+					"Loading#%d %4.4x bytes at %4.4x\n",
 					i, count, addr);
 				while (more && count > 0) {
 					if (addr & 0x4000) {
@@ -777,7 +756,8 @@ static int jr3_pci_attach(struct comedi_device *dev,
 	opt_slot = it->options[1];
 
 	if (sizeof(struct jr3_channel) != 0xc00) {
-		dev_err(dev->hw_dev, "sizeof(struct jr3_channel) = %x [expected %x]\n",
+		dev_err(dev->class_dev,
+			"sizeof(struct jr3_channel) = %x [expected %x]\n",
 			(unsigned)sizeof(struct jr3_channel), 0xc00);
 		return -EINVAL;
 	}
@@ -832,7 +812,7 @@ static int jr3_pci_attach(struct comedi_device *dev,
 		}
 	}
 	if (!card) {
-		dev_err(dev->hw_dev, "no jr3_pci found\n");
+		dev_err(dev->class_dev, "no jr3_pci found\n");
 		return -EIO;
 	} else {
 		devpriv->pci_dev = card;
@@ -849,9 +829,9 @@ static int jr3_pci_attach(struct comedi_device *dev,
 	if (!devpriv->iobase)
 		return -ENOMEM;
 
-	result = alloc_subdevices(dev, devpriv->n_channels);
-	if (result < 0)
-		goto out;
+	result = comedi_alloc_subdevices(dev, devpriv->n_channels);
+	if (result)
+		return result;
 
 	dev->open = jr3_pci_open;
 	for (i = 0; i < devpriv->n_channels; i++) {
@@ -867,7 +847,7 @@ static int jr3_pci_attach(struct comedi_device *dev,
 
 			p = dev->subdevices[i].private;
 			p->channel = &devpriv->iobase->channel[i].data;
-			dev_dbg(dev->hw_dev, "p->channel %p %p (%tx)\n",
+			dev_dbg(dev->class_dev, "p->channel %p %p (%tx)\n",
 				p->channel, devpriv->iobase,
 				((char *)(p->channel) -
 				 (char *)(devpriv->iobase)));
@@ -896,7 +876,7 @@ static int jr3_pci_attach(struct comedi_device *dev,
 			p->maxdata_list[56] = 0xffff;
 			p->maxdata_list[57] = 0xffff;
 			/*  Channel specific range and maxdata */
-			dev->subdevices[i].range_table = 0;
+			dev->subdevices[i].range_table = NULL;
 			dev->subdevices[i].range_table_list =
 			    p->range_table_list;
 			dev->subdevices[i].maxdata = 0;
@@ -905,10 +885,10 @@ static int jr3_pci_attach(struct comedi_device *dev,
 	}
 
 	/*  Reset DSP card */
-	devpriv->iobase->channel[0].reset = 0;
+	writel(0, &devpriv->iobase->channel[0].reset);
 
 	result = comedi_load_firmware(dev, "jr3pci.idm", jr3_download_firmware);
-	dev_dbg(dev->hw_dev, "Firmare load %d\n", result);
+	dev_dbg(dev->class_dev, "Firmare load %d\n", result);
 
 	if (result < 0)
 		goto out;
@@ -926,7 +906,7 @@ static int jr3_pci_attach(struct comedi_device *dev,
  */
 	msleep_interruptible(25);
 	for (i = 0; i < 0x18; i++) {
-		dev_dbg(dev->hw_dev, "%c\n",
+		dev_dbg(dev->class_dev, "%c\n",
 			get_u16(&devpriv->iobase->channel[0].
 				data.copyright[i]) >> 8);
 	}
@@ -948,9 +928,7 @@ out:
 	return result;
 }
 
-MODULE_FIRMWARE("comedi/jr3pci.idm");
-
-static int jr3_pci_detach(struct comedi_device *dev)
+static void jr3_pci_detach(struct comedi_device *dev)
 {
 	int i;
 	struct jr3_pci_dev_private *devpriv = dev->private;
@@ -962,56 +940,52 @@ static int jr3_pci_detach(struct comedi_device *dev)
 			for (i = 0; i < devpriv->n_channels; i++)
 				kfree(dev->subdevices[i].private);
 		}
-
 		if (devpriv->iobase)
 			iounmap((void *)devpriv->iobase);
 		if (devpriv->pci_enabled)
 			comedi_pci_disable(devpriv->pci_dev);
-
 		if (devpriv->pci_dev)
 			pci_dev_put(devpriv->pci_dev);
 	}
-	return 0;
 }
 
-static int __devinit driver_jr3_pci_pci_probe(struct pci_dev *dev,
-					      const struct pci_device_id *ent)
+static struct comedi_driver jr3_pci_driver = {
+	.driver_name	= "jr3_pci",
+	.module		= THIS_MODULE,
+	.attach		= jr3_pci_attach,
+	.detach		= jr3_pci_detach,
+};
+
+static int __devinit jr3_pci_pci_probe(struct pci_dev *dev,
+				       const struct pci_device_id *ent)
 {
-	return comedi_pci_auto_config(dev, driver_jr3_pci.driver_name);
+	return comedi_pci_auto_config(dev, &jr3_pci_driver);
 }
 
-static void __devexit driver_jr3_pci_pci_remove(struct pci_dev *dev)
+static void __devexit jr3_pci_pci_remove(struct pci_dev *dev)
 {
 	comedi_pci_auto_unconfig(dev);
 }
 
-static struct pci_driver driver_jr3_pci_pci_driver = {
-	.id_table = jr3_pci_pci_table,
-	.probe = &driver_jr3_pci_pci_probe,
-	.remove = __devexit_p(&driver_jr3_pci_pci_remove)
+static DEFINE_PCI_DEVICE_TABLE(jr3_pci_pci_table) = {
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_1_CHANNEL_NEW) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_2_CHANNEL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_3_CHANNEL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_JR3, PCI_DEVICE_ID_JR3_4_CHANNEL) },
+	{ 0 }
 };
+MODULE_DEVICE_TABLE(pci, jr3_pci_pci_table);
 
-static int __init driver_jr3_pci_init_module(void)
-{
-	int retval;
-
-	retval = comedi_driver_register(&driver_jr3_pci);
-	if (retval < 0)
-		return retval;
-
-	driver_jr3_pci_pci_driver.name = (char *)driver_jr3_pci.driver_name;
-	return pci_register_driver(&driver_jr3_pci_pci_driver);
-}
-
-static void __exit driver_jr3_pci_cleanup_module(void)
-{
-	pci_unregister_driver(&driver_jr3_pci_pci_driver);
-	comedi_driver_unregister(&driver_jr3_pci);
-}
-
-module_init(driver_jr3_pci_init_module);
-module_exit(driver_jr3_pci_cleanup_module);
+static struct pci_driver jr3_pci_pci_driver = {
+	.name		= "jr3_pci",
+	.id_table	= jr3_pci_pci_table,
+	.probe		= jr3_pci_pci_probe,
+	.remove		= __devexit_p(jr3_pci_pci_remove),
+};
+module_comedi_pci_driver(jr3_pci_driver, jr3_pci_pci_driver);
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");
 MODULE_LICENSE("GPL");
+MODULE_FIRMWARE("comedi/jr3pci.idm");

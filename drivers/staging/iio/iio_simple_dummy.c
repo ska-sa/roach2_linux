@@ -19,15 +19,15 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 
-#include "iio.h"
-#include "sysfs.h"
-#include "events.h"
-#include "buffer.h"
+#include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
+#include <linux/iio/events.h>
+#include <linux/iio/buffer.h>
 #include "iio_simple_dummy.h"
 
 /*
  * A few elements needed to fake a bus for this driver
- * Note instances parmeter controls how many of these
+ * Note instances parameter controls how many of these
  * dummy devices are registered.
  */
 static unsigned instances = 1;
@@ -63,7 +63,7 @@ static const struct iio_dummy_accel_calibscale dummy_scales[] = {
  * This array of structures tells the IIO core about what the device
  * actually provides for a given channel.
  */
-static struct iio_chan_spec iio_dummy_channels[] = {
+static const struct iio_chan_spec iio_dummy_channels[] = {
 	/* indexed ADC channel in_voltage0_raw etc */
 	{
 		.type = IIO_VOLTAGE,
@@ -72,6 +72,12 @@ static struct iio_chan_spec iio_dummy_channels[] = {
 		.channel = 0,
 		/* What other information is available? */
 		.info_mask =
+		/*
+		 * in_voltage0_raw
+		 * Raw (unscaled no bias removal etc) measurement
+		 * from the device.
+		 */
+		IIO_CHAN_INFO_RAW_SEPARATE_BIT |
 		/*
 		 * in_voltage0_offset
 		 * Offset for userspace to apply prior to scale
@@ -114,6 +120,12 @@ static struct iio_chan_spec iio_dummy_channels[] = {
 		.channel2 = 2,
 		.info_mask =
 		/*
+		 * in_voltage1-voltage2_raw
+		 * Raw (unscaled no bias removal etc) measurement
+		 * from the device.
+		 */
+		IIO_CHAN_INFO_RAW_SEPARATE_BIT |
+		/*
 		 * in_voltage-voltage_scale
 		 * Shared version of scale - shared by differential
 		 * input channels of type IIO_VOLTAGE.
@@ -135,6 +147,7 @@ static struct iio_chan_spec iio_dummy_channels[] = {
 		.channel = 3,
 		.channel2 = 4,
 		.info_mask =
+		IIO_CHAN_INFO_RAW_SEPARATE_BIT |
 		IIO_CHAN_INFO_SCALE_SHARED_BIT,
 		.scan_index = diffvoltage3m4,
 		.scan_type = {
@@ -154,6 +167,7 @@ static struct iio_chan_spec iio_dummy_channels[] = {
 		/* Channel 2 is use for modifiers */
 		.channel2 = IIO_MOD_X,
 		.info_mask =
+		IIO_CHAN_INFO_RAW_SEPARATE_BIT |
 		/*
 		 * Internal bias correction value. Applied
 		 * by the hardware or driver prior to userspace
@@ -164,7 +178,7 @@ static struct iio_chan_spec iio_dummy_channels[] = {
 		.scan_index = accelx,
 		.scan_type = { /* Description of storage in buffer */
 			.sign = 's', /* signed */
-			.realbits = 16, /* 12 bits */
+			.realbits = 16, /* 16 bits */
 			.storagebits = 16, /* 16 bits used for storage */
 			.shift = 0, /* zero shift */
 		},
@@ -177,6 +191,7 @@ static struct iio_chan_spec iio_dummy_channels[] = {
 	/* DAC channel out_voltage0_raw */
 	{
 		.type = IIO_VOLTAGE,
+		.info_mask = IIO_CHAN_INFO_RAW_SEPARATE_BIT,
 		.output = 1,
 		.indexed = 1,
 		.channel = 0,
@@ -203,7 +218,7 @@ static int iio_dummy_read_raw(struct iio_dev *indio_dev,
 
 	mutex_lock(&st->lock);
 	switch (mask) {
-	case 0: /* magic value - channel value read */
+	case IIO_CHAN_INFO_RAW: /* magic value - channel value read */
 		switch (chan->type) {
 		case IIO_VOLTAGE:
 			if (chan->output) {
@@ -270,9 +285,9 @@ static int iio_dummy_read_raw(struct iio_dev *indio_dev,
  * iio_dummy_write_raw() - data write function.
  * @indio_dev:	the struct iio_dev associated with this device instance
  * @chan:	the channel whose data is to be read
- * @val:	first element of returned value (typically INT)
- * @val2:	second element of returned value (typically MICRO)
- * @mask:	what we actually want to read. 0 is the channel, everything else
+ * @val:	first element of value to set (typically INT)
+ * @val2:	second element of value to set (typically MICRO)
+ * @mask:	what we actually want to write. 0 is the channel, everything else
  *		is as per the info_mask in iio_chan_spec.
  *
  * Note that all raw writes are assumed IIO_VAL_INT and info mask elements
@@ -290,7 +305,7 @@ static int iio_dummy_write_raw(struct iio_dev *indio_dev,
 	struct iio_dummy_state *st = iio_priv(indio_dev);
 
 	switch (mask) {
-	case 0:
+	case IIO_CHAN_INFO_RAW:
 		if (chan->output == 0)
 			return -EINVAL;
 
@@ -377,7 +392,7 @@ static int __devinit iio_dummy_probe(int index)
 	 * It also has a region (accessed by iio_priv()
 	 * for chip specific state information.
 	 */
-	indio_dev = iio_allocate_device(sizeof(*st));
+	indio_dev = iio_device_alloc(sizeof(*st));
 	if (indio_dev == NULL) {
 		ret = -ENOMEM;
 		goto error_ret;
@@ -430,34 +445,26 @@ static int __devinit iio_dummy_probe(int index)
 	if (ret < 0)
 		goto error_free_device;
 
-	/* Configure buffered capture support. */
-	ret = iio_simple_dummy_configure_buffer(indio_dev);
+	/*
+	 * Configure buffered capture support and register the channels with the
+	 * buffer, but avoid the output channel being registered by reducing the
+	 * number of channels by 1.
+	 */
+	ret = iio_simple_dummy_configure_buffer(indio_dev, iio_dummy_channels, 5);
 	if (ret < 0)
 		goto error_unregister_events;
 
-	/*
-	 * Register the channels with the buffer, but avoid the output
-	 * channel being registered by reducing the number of channels by 1.
-	 */
-	ret = iio_buffer_register(indio_dev, iio_dummy_channels, 5);
+	ret = iio_device_register(indio_dev);
 	if (ret < 0)
 		goto error_unconfigure_buffer;
 
-	ret = iio_device_register(indio_dev);
-	if (ret < 0)
-		goto error_unregister_buffer;
-
 	return 0;
-error_unregister_buffer:
-	iio_buffer_unregister(indio_dev);
 error_unconfigure_buffer:
 	iio_simple_dummy_unconfigure_buffer(indio_dev);
 error_unregister_events:
 	iio_simple_dummy_events_unregister(indio_dev);
 error_free_device:
-	/* Note free device should only be called, before registration
-	 * has succeeded. */
-	iio_free_device(indio_dev);
+	iio_device_free(indio_dev);
 error_ret:
 	return ret;
 }
@@ -486,7 +493,6 @@ static int iio_dummy_remove(int index)
 	/* Device specific code to power down etc */
 
 	/* Buffered capture related cleanup */
-	iio_buffer_unregister(indio_dev);
 	iio_simple_dummy_unconfigure_buffer(indio_dev);
 
 	ret = iio_simple_dummy_events_unregister(indio_dev);
@@ -494,7 +500,7 @@ static int iio_dummy_remove(int index)
 		goto error_ret;
 
 	/* Free all structures */
-	iio_free_device(indio_dev);
+	iio_device_free(indio_dev);
 
 error_ret:
 	return ret;
@@ -517,6 +523,7 @@ static __init int iio_dummy_init(void)
 		instances = 1;
 		return -EINVAL;
 	}
+
 	/* Fake a bus */
 	iio_dummy_devs = kcalloc(instances, sizeof(*iio_dummy_devs),
 				 GFP_KERNEL);
@@ -545,6 +552,6 @@ static __exit void iio_dummy_exit(void)
 }
 module_exit(iio_dummy_exit);
 
-MODULE_AUTHOR("Jonathan Cameron <jic23@cam.ac.uk>");
+MODULE_AUTHOR("Jonathan Cameron <jic23@kernel.org>");
 MODULE_DESCRIPTION("IIO dummy driver");
 MODULE_LICENSE("GPL v2");

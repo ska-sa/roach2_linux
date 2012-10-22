@@ -92,6 +92,8 @@ enum omap_ecc {
 	OMAP_ECC_HAMMING_CODE_HW, /* gpmc to detect the error */
 		/* 1-bit ecc: stored at beginning of spare area as romcode */
 	OMAP_ECC_HAMMING_CODE_HW_ROMCODE, /* gpmc method & romcode layout */
+	OMAP_ECC_BCH4_CODE_HW, /* 4-bit BCH ecc code */
+	OMAP_ECC_BCH8_CODE_HW, /* 8-bit BCH ecc code */
 };
 
 /*
@@ -131,6 +133,25 @@ struct gpmc_timings {
 	u16 wr_data_mux_bus;	/* WRDATAONADMUXBUS */
 };
 
+struct gpmc_nand_regs {
+	void __iomem	*gpmc_status;
+	void __iomem	*gpmc_nand_command;
+	void __iomem	*gpmc_nand_address;
+	void __iomem	*gpmc_nand_data;
+	void __iomem	*gpmc_prefetch_config1;
+	void __iomem	*gpmc_prefetch_config2;
+	void __iomem	*gpmc_prefetch_control;
+	void __iomem	*gpmc_prefetch_status;
+	void __iomem	*gpmc_ecc_config;
+	void __iomem	*gpmc_ecc_control;
+	void __iomem	*gpmc_ecc_size_config;
+	void __iomem	*gpmc_ecc1_result;
+	void __iomem	*gpmc_bch_result0;
+};
+
+extern void gpmc_update_nand_reg(struct gpmc_nand_regs *reg, int cs);
+extern int gpmc_get_client_irq(unsigned irq_config);
+
 extern unsigned int gpmc_ns_to_ticks(unsigned int time_ns);
 extern unsigned int gpmc_ps_to_ticks(unsigned int time_ps);
 extern unsigned int gpmc_ticks_to_ns(unsigned int ticks);
@@ -157,4 +178,13 @@ extern int gpmc_nand_write(int cs, int cmd, int wval);
 
 int gpmc_enable_hwecc(int cs, int mode, int dev_width, int ecc_size);
 int gpmc_calculate_ecc(int cs, const u_char *dat, u_char *ecc_code);
+
+#ifdef CONFIG_ARCH_OMAP3
+int gpmc_init_hwecc_bch(int cs, int nsectors, int nerrors);
+int gpmc_enable_hwecc_bch(int cs, int mode, int dev_width, int nsectors,
+			  int nerrors);
+int gpmc_calculate_ecc_bch4(int cs, const u_char *dat, u_char *ecc);
+int gpmc_calculate_ecc_bch8(int cs, const u_char *dat, u_char *ecc);
+#endif /* CONFIG_ARCH_OMAP3 */
+
 #endif

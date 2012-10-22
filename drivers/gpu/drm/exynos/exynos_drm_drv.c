@@ -25,9 +25,8 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "drmP.h"
-#include "drm.h"
-#include "drm_crtc_helper.h"
+#include <drm/drmP.h>
+#include <drm/drm_crtc_helper.h>
 
 #include <drm/exynos_drm.h>
 
@@ -39,6 +38,8 @@
 #include "exynos_drm_gem.h"
 #include "exynos_drm_plane.h"
 #include "exynos_drm_vidi.h"
+#include "exynos_drm_dmabuf.h"
+#include "exynos_drm_g2d.h"
 
 #define DRIVER_NAME	"exynos"
 #define DRIVER_DESC	"Samsung SoC DRM"
@@ -83,8 +84,11 @@ static int exynos_drm_load(struct drm_device *dev, unsigned long flags)
 	}
 
 	for (nr = 0; nr < MAX_PLANE; nr++) {
-		ret = exynos_plane_init(dev, nr);
-		if (ret)
+		struct drm_plane *plane;
+		unsigned int possible_crtcs = (1 << MAX_CRTC) - 1;
+
+		plane = exynos_plane_init(dev, possible_crtcs, false);
+		if (!plane)
 			goto err_crtc;
 	}
 
@@ -147,7 +151,15 @@ static int exynos_drm_unload(struct drm_device *dev)
 
 static int exynos_drm_open(struct drm_device *dev, struct drm_file *file)
 {
+	struct drm_exynos_file_private *file_priv;
+
 	DRM_DEBUG_DRIVER("%s\n", __FILE__);
+
+	file_priv = kzalloc(sizeof(*file_priv), GFP_KERNEL);
+	if (!file_priv)
+		return -ENOMEM;
+
+	file->driver_priv = file_priv;
 
 	return exynos_drm_subdrv_open(dev, file);
 }
@@ -193,7 +205,7 @@ static void exynos_drm_lastclose(struct drm_device *dev)
 	exynos_drm_fbdev_restore_mode(dev);
 }
 
-static struct vm_operations_struct exynos_drm_gem_vm_ops = {
+static const struct vm_operations_struct exynos_drm_gem_vm_ops = {
 	.fault = exynos_drm_gem_fault,
 	.open = drm_gem_vm_open,
 	.close = drm_gem_vm_close,
@@ -207,10 +219,16 @@ static struct drm_ioctl_desc exynos_ioctls[] = {
 			DRM_AUTH),
 	DRM_IOCTL_DEF_DRV(EXYNOS_GEM_MMAP,
 			exynos_drm_gem_mmap_ioctl, DRM_UNLOCKED | DRM_AUTH),
-	DRM_IOCTL_DEF_DRV(EXYNOS_PLANE_SET_ZPOS, exynos_plane_set_zpos_ioctl,
-			DRM_UNLOCKED | DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(EXYNOS_GEM_GET,
+			exynos_drm_gem_get_ioctl, DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(EXYNOS_VIDI_CONNECTION,
 			vidi_connection_ioctl, DRM_UNLOCKED | DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(EXYNOS_G2D_GET_VER,
+			exynos_g2d_get_ver_ioctl, DRM_UNLOCKED | DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(EXYNOS_G2D_SET_CMDLIST,
+			exynos_g2d_set_cmdlist_ioctl, DRM_UNLOCKED | DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(EXYNOS_G2D_EXEC,
+			exynos_g2d_exec_ioctl, DRM_UNLOCKED | DRM_AUTH),
 };
 
 static const struct file_operations exynos_drm_driver_fops = {
@@ -220,12 +238,15 @@ static const struct file_operations exynos_drm_driver_fops = {
 	.poll		= drm_poll,
 	.read		= drm_read,
 	.unlocked_ioctl	= drm_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = drm_compat_ioctl,
+#endif
 	.release	= drm_release,
 };
 
 static struct drm_driver exynos_drm_driver = {
-	.driver_features	= DRIVER_HAVE_IRQ | DRIVER_BUS_PLATFORM |
-				  DRIVER_MODESET | DRIVER_GEM,
+	.driver_features	= DRIVER_HAVE_IRQ | DRIVER_MODESET |
+					DRIVER_GEM | DRIVER_PRIME,
 	.load			= exynos_drm_load,
 	.unload			= exynos_drm_unload,
 	.open			= exynos_drm_open,
@@ -241,6 +262,10 @@ static struct drm_driver exynos_drm_driver = {
 	.dumb_create		= exynos_drm_gem_dumb_create,
 	.dumb_map_offset	= exynos_drm_gem_dumb_map_offset,
 	.dumb_destroy		= exynos_drm_gem_dumb_destroy,
+	.prime_handle_to_fd	= drm_gem_prime_handle_to_fd,
+	.prime_fd_to_handle	= drm_gem_prime_fd_to_handle,
+	.gem_prime_export	= exynos_dmabuf_prime_export,
+	.gem_prime_import	= exynos_dmabuf_prime_import,
 	.ioctls			= exynos_ioctls,
 	.fops			= &exynos_drm_driver_fops,
 	.name	= DRIVER_NAME,
@@ -307,6 +332,12 @@ static int __init exynos_drm_init(void)
 		goto out_vidi;
 #endif
 
+#ifdef CONFIG_DRM_EXYNOS_G2D
+	ret = platform_driver_register(&g2d_driver);
+	if (ret < 0)
+		goto out_g2d;
+#endif
+
 	ret = platform_driver_register(&exynos_drm_platform_driver);
 	if (ret < 0)
 		goto out;
@@ -314,6 +345,11 @@ static int __init exynos_drm_init(void)
 	return 0;
 
 out:
+#ifdef CONFIG_DRM_EXYNOS_G2D
+	platform_driver_unregister(&g2d_driver);
+out_g2d:
+#endif
+
 #ifdef CONFIG_DRM_EXYNOS_VIDI
 out_vidi:
 	platform_driver_unregister(&vidi_driver);
@@ -340,6 +376,10 @@ static void __exit exynos_drm_exit(void)
 	DRM_DEBUG_DRIVER("%s\n", __FILE__);
 
 	platform_driver_unregister(&exynos_drm_platform_driver);
+
+#ifdef CONFIG_DRM_EXYNOS_G2D
+	platform_driver_unregister(&g2d_driver);
+#endif
 
 #ifdef CONFIG_DRM_EXYNOS_HDMI
 	platform_driver_unregister(&exynos_drm_common_hdmi_driver);

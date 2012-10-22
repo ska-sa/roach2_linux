@@ -50,7 +50,7 @@ static void mlx4_ib_cq_event(struct mlx4_cq *cq, enum mlx4_event type)
 	struct ib_cq *ibcq;
 
 	if (type != MLX4_EVENT_TYPE_CQ_ERROR) {
-		printk(KERN_WARNING "mlx4_ib: Unexpected event type %d "
+		pr_warn("Unexpected event type %d "
 		       "on CQ %06x\n", type, cq->cqn);
 		return;
 	}
@@ -221,6 +221,9 @@ struct ib_cq *mlx4_ib_create_cq(struct ib_device *ibdev, int entries, int vector
 
 		uar = &dev->priv_uar;
 	}
+
+	if (dev->eq_table)
+		vector = dev->eq_table[vector % ibdev->num_comp_vectors];
 
 	err = mlx4_cq_alloc(dev->dev, entries, &cq->buf.mtt, uar,
 			    cq->db.dma, &cq->mcq, vector, 0);
@@ -463,7 +466,7 @@ static void dump_cqe(void *cqe)
 {
 	__be32 *buf = cqe;
 
-	printk(KERN_DEBUG "CQE contents %08x %08x %08x %08x %08x %08x %08x %08x\n",
+	pr_debug("CQE contents %08x %08x %08x %08x %08x %08x %08x %08x\n",
 	       be32_to_cpu(buf[0]), be32_to_cpu(buf[1]), be32_to_cpu(buf[2]),
 	       be32_to_cpu(buf[3]), be32_to_cpu(buf[4]), be32_to_cpu(buf[5]),
 	       be32_to_cpu(buf[6]), be32_to_cpu(buf[7]));
@@ -473,7 +476,7 @@ static void mlx4_ib_handle_error_cqe(struct mlx4_err_cqe *cqe,
 				     struct ib_wc *wc)
 {
 	if (cqe->syndrome == MLX4_CQE_SYNDROME_LOCAL_QP_OP_ERR) {
-		printk(KERN_DEBUG "local QP operation err "
+		pr_debug("local QP operation err "
 		       "(QPN %06x, WQE index %x, vendor syndrome %02x, "
 		       "opcode = %02x)\n",
 		       be32_to_cpu(cqe->my_qpn), be16_to_cpu(cqe->wqe_index),
@@ -544,6 +547,26 @@ static int mlx4_ib_ipoib_csum_ok(__be16 status, __be16 checksum)
 		checksum == cpu_to_be16(0xffff);
 }
 
+static int use_tunnel_data(struct mlx4_ib_qp *qp, struct mlx4_ib_cq *cq, struct ib_wc *wc,
+			   unsigned tail, struct mlx4_cqe *cqe)
+{
+	struct mlx4_ib_proxy_sqp_hdr *hdr;
+
+	ib_dma_sync_single_for_cpu(qp->ibqp.device,
+				   qp->sqp_proxy_rcv[tail].map,
+				   sizeof (struct mlx4_ib_proxy_sqp_hdr),
+				   DMA_FROM_DEVICE);
+	hdr = (struct mlx4_ib_proxy_sqp_hdr *) (qp->sqp_proxy_rcv[tail].addr);
+	wc->pkey_index	= be16_to_cpu(hdr->tun.pkey_index);
+	wc->slid	= be16_to_cpu(hdr->tun.slid_mac_47_32);
+	wc->sl		= (u8) (be16_to_cpu(hdr->tun.sl_vid) >> 12);
+	wc->src_qp	= be32_to_cpu(hdr->tun.flags_src_qp) & 0xFFFFFF;
+	wc->wc_flags   |= (hdr->tun.g_ml_path & 0x80) ? (IB_WC_GRH) : 0;
+	wc->dlid_path_bits = 0;
+
+	return 0;
+}
+
 static int mlx4_ib_poll_one(struct mlx4_ib_cq *cq,
 			    struct mlx4_ib_qp **cur_qp,
 			    struct ib_wc *wc)
@@ -556,6 +579,7 @@ static int mlx4_ib_poll_one(struct mlx4_ib_cq *cq,
 	int is_error;
 	u32 g_mlpath_rqpn;
 	u16 wqe_ctr;
+	unsigned tail = 0;
 
 repoll:
 	cqe = next_cqe_sw(cq);
@@ -576,7 +600,7 @@ repoll:
 
 	if (unlikely((cqe->owner_sr_opcode & MLX4_CQE_OPCODE_MASK) == MLX4_OPCODE_NOP &&
 		     is_send)) {
-		printk(KERN_WARNING "Completion for NOP opcode detected!\n");
+		pr_warn("Completion for NOP opcode detected!\n");
 		return -EINVAL;
 	}
 
@@ -606,7 +630,7 @@ repoll:
 		mqp = __mlx4_qp_lookup(to_mdev(cq->ibcq.device)->dev,
 				       be32_to_cpu(cqe->vlan_my_qpn));
 		if (unlikely(!mqp)) {
-			printk(KERN_WARNING "CQ %06x with entry for unknown QPN %06x\n",
+			pr_warn("CQ %06x with entry for unknown QPN %06x\n",
 			       cq->mcq.cqn, be32_to_cpu(cqe->vlan_my_qpn) & MLX4_CQE_QPN_MASK);
 			return -EINVAL;
 		}
@@ -631,7 +655,8 @@ repoll:
 		mlx4_ib_free_srq_wqe(srq, wqe_ctr);
 	} else {
 		wq	  = &(*cur_qp)->rq;
-		wc->wr_id = wq->wrid[wq->tail & (wq->wqe_cnt - 1)];
+		tail	  = wq->tail & (wq->wqe_cnt - 1);
+		wc->wr_id = wq->wrid[tail];
 		++wq->tail;
 	}
 
@@ -712,6 +737,13 @@ repoll:
 			wc->wc_flags	= IB_WC_WITH_IMM;
 			wc->ex.imm_data = cqe->immed_rss_invalid;
 			break;
+		}
+
+		if (mlx4_is_mfunc(to_mdev(cq->ibcq.device)->dev)) {
+			if ((*cur_qp)->mlx4_ib_qp_type &
+			    (MLX4_IB_QPT_PROXY_SMI_OWNER |
+			     MLX4_IB_QPT_PROXY_SMI | MLX4_IB_QPT_PROXY_GSI))
+				return use_tunnel_data(*cur_qp, cq, wc, tail, cqe);
 		}
 
 		wc->slid	   = be16_to_cpu(cqe->rlid);

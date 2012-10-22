@@ -232,12 +232,12 @@ static int handle_mmio(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	if ((p->addr & PAGE_MASK) == IOAPIC_DEFAULT_BASE_ADDRESS)
 		goto mmio;
 	vcpu->mmio_needed = 1;
-	vcpu->mmio_phys_addr = kvm_run->mmio.phys_addr = p->addr;
-	vcpu->mmio_size = kvm_run->mmio.len = p->size;
+	vcpu->mmio_fragments[0].gpa = kvm_run->mmio.phys_addr = p->addr;
+	vcpu->mmio_fragments[0].len = kvm_run->mmio.len = p->size;
 	vcpu->mmio_is_write = kvm_run->mmio.is_write = !p->dir;
 
 	if (vcpu->mmio_is_write)
-		memcpy(vcpu->mmio_data, &p->data, p->size);
+		memcpy(vcpu->arch.mmio_data, &p->data, p->size);
 	memcpy(kvm_run->mmio.data, &p->data, p->size);
 	kvm_run->exit_reason = KVM_EXIT_MMIO;
 	return 0;
@@ -719,7 +719,7 @@ static void kvm_set_mmio_data(struct kvm_vcpu *vcpu)
 	struct kvm_mmio_req *p = kvm_get_vcpu_ioreq(vcpu);
 
 	if (!vcpu->mmio_is_write)
-		memcpy(&p->data, vcpu->mmio_data, 8);
+		memcpy(&p->data, vcpu->arch.mmio_data, 8);
 	p->state = STATE_IORESP_READY;
 }
 
@@ -739,7 +739,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	}
 
 	if (vcpu->mmio_needed) {
-		memcpy(vcpu->mmio_data, kvm_run->mmio.data, 8);
+		memcpy(vcpu->arch.mmio_data, kvm_run->mmio.data, 8);
 		kvm_set_mmio_data(vcpu);
 		vcpu->mmio_read_completed = 1;
 		vcpu->mmio_needed = 0;
@@ -924,6 +924,16 @@ int kvm_arch_vcpu_ioctl_set_regs(struct kvm_vcpu *vcpu, struct kvm_regs *regs)
 	return 0;
 }
 
+int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_event)
+{
+	if (!irqchip_in_kernel(kvm))
+		return -ENXIO;
+
+	irq_event->status = kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID,
+					irq_event->irq, irq_event->level);
+	return 0;
+}
+
 long kvm_arch_vm_ioctl(struct file *filp,
 		unsigned int ioctl, unsigned long arg)
 {
@@ -963,29 +973,6 @@ long kvm_arch_vm_ioctl(struct file *filp,
 			goto out;
 		}
 		break;
-	case KVM_IRQ_LINE_STATUS:
-	case KVM_IRQ_LINE: {
-		struct kvm_irq_level irq_event;
-
-		r = -EFAULT;
-		if (copy_from_user(&irq_event, argp, sizeof irq_event))
-			goto out;
-		r = -ENXIO;
-		if (irqchip_in_kernel(kvm)) {
-			__s32 status;
-			status = kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID,
-				    irq_event.irq, irq_event.level);
-			if (ioctl == KVM_IRQ_LINE_STATUS) {
-				r = -EFAULT;
-				irq_event.status = status;
-				if (copy_to_user(argp, &irq_event,
-							sizeof irq_event))
-					goto out;
-			}
-			r = 0;
-		}
-		break;
-		}
 	case KVM_GET_IRQCHIP: {
 		/* 0: PIC master, 1: PIC slave, 2: IOAPIC */
 		struct kvm_irqchip chip;
@@ -1174,7 +1161,7 @@ out:
 
 bool kvm_vcpu_compatible(struct kvm_vcpu *vcpu)
 {
-	return irqchip_in_kernel(vcpu->kcm) == (vcpu->arch.apic != NULL);
+	return irqchip_in_kernel(vcpu->kvm) == (vcpu->arch.apic != NULL);
 }
 
 int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
@@ -1626,9 +1613,15 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
 	return;
 }
 
-void kvm_arch_flush_shadow(struct kvm *kvm)
+void kvm_arch_flush_shadow_all(struct kvm *kvm)
 {
 	kvm_flush_remote_tlbs(kvm);
+}
+
+void kvm_arch_flush_shadow_memslot(struct kvm *kvm,
+				   struct kvm_memory_slot *slot)
+{
+	kvm_arch_flush_shadow_all();
 }
 
 long kvm_arch_dev_ioctl(struct file *filp,
@@ -1872,21 +1865,6 @@ void kvm_arch_hardware_unsetup(void)
 {
 }
 
-void kvm_vcpu_kick(struct kvm_vcpu *vcpu)
-{
-	int me;
-	int cpu = vcpu->cpu;
-
-	if (waitqueue_active(&vcpu->wq))
-		wake_up_interruptible(&vcpu->wq);
-
-	me = get_cpu();
-	if (cpu != me && (unsigned) cpu < nr_cpu_ids && cpu_online(cpu))
-		if (!test_and_set_bit(KVM_REQ_KICK, &vcpu->requests))
-			smp_send_reschedule(cpu);
-	put_cpu();
-}
-
 int kvm_apic_set_irq(struct kvm_vcpu *vcpu, struct kvm_lapic_irq *irq)
 {
 	return __apic_accept_irq(vcpu, irq->vector);
@@ -1954,6 +1932,11 @@ int kvm_arch_vcpu_runnable(struct kvm_vcpu *vcpu)
 {
 	return (vcpu->arch.mp_state == KVM_MP_STATE_RUNNABLE) ||
 		(kvm_highest_pending_irq(vcpu) != -1);
+}
+
+int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)
+{
+	return (!test_and_set_bit(KVM_REQ_KICK, &vcpu->requests));
 }
 
 int kvm_arch_vcpu_ioctl_get_mpstate(struct kvm_vcpu *vcpu,

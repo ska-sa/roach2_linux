@@ -5,17 +5,18 @@
 menu "Near Field Communication (NFC) devices"
 	depends on NFC
 
-config PN544_NFC
-	tristate "PN544 NFC driver"
-	depends on I2C
+config PN544_HCI_NFC
+	tristate "HCI PN544 NFC driver"
+	depends on I2C && NFC_HCI && NFC_SHDLC
 	select CRC_CCITT
 	default n
 	---help---
-	  Say yes if you want PN544 Near Field Communication driver.
-	  This is for i2c connected version. If unsure, say N here.
+	  NXP PN544 i2c driver.
+	  This is a driver based on the SHDLC and HCI NFC kernel layers and
+	  will thus not work with NXP libnfc library.
 
 	  To compile this driver as a module, choose m here. The module will
-	  be called pn544.
+	  be called pn544_hci.
 
 config NFC_PN533
 	tristate "NXP PN533 USB driver"

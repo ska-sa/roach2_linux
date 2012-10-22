@@ -30,16 +30,14 @@
 #ifndef _TTM_BO_DRIVER_H_
 #define _TTM_BO_DRIVER_H_
 
-#include "ttm/ttm_bo_api.h"
-#include "ttm/ttm_memory.h"
-#include "ttm/ttm_module.h"
-#include "drm_mm.h"
-#include "drm_global.h"
-#include "linux/workqueue.h"
-#include "linux/fs.h"
-#include "linux/spinlock.h"
-
-struct ttm_backend;
+#include <ttm/ttm_bo_api.h>
+#include <ttm/ttm_memory.h>
+#include <ttm/ttm_module.h>
+#include <drm/drm_mm.h>
+#include <drm/drm_global.h>
+#include <linux/workqueue.h>
+#include <linux/fs.h>
+#include <linux/spinlock.h>
 
 struct ttm_backend_func {
 	/**
@@ -81,6 +79,7 @@ struct ttm_backend_func {
 #define TTM_PAGE_FLAG_PERSISTENT_SWAP (1 << 5)
 #define TTM_PAGE_FLAG_ZERO_ALLOC      (1 << 6)
 #define TTM_PAGE_FLAG_DMA32           (1 << 7)
+#define TTM_PAGE_FLAG_SG              (1 << 8)
 
 enum ttm_caching_state {
 	tt_uncached,
@@ -116,8 +115,8 @@ struct ttm_tt {
 	struct page **pages;
 	uint32_t page_flags;
 	unsigned long num_pages;
+	struct sg_table *sg; /* for SG objects via dma-buf */
 	struct ttm_bo_global *glob;
-	struct ttm_backend *be;
 	struct file *swap_storage;
 	enum ttm_caching_state caching_state;
 	enum {

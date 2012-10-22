@@ -29,6 +29,7 @@
 #define NMK_GPIO_SLPC	0x1c
 #define NMK_GPIO_AFSLA	0x20
 #define NMK_GPIO_AFSLB	0x24
+#define NMK_GPIO_LOWEMI	0x28
 
 #define NMK_GPIO_RIMSC	0x40
 #define NMK_GPIO_FIMSC	0x44
@@ -43,6 +44,12 @@
 #define NMK_GPIO_ALT_A	1
 #define NMK_GPIO_ALT_B	2
 #define NMK_GPIO_ALT_C	(NMK_GPIO_ALT_A | NMK_GPIO_ALT_B)
+
+#define NMK_GPIO_ALT_CX_SHIFT 2
+#define NMK_GPIO_ALT_C1	((1<<NMK_GPIO_ALT_CX_SHIFT) | NMK_GPIO_ALT_C)
+#define NMK_GPIO_ALT_C2	((2<<NMK_GPIO_ALT_CX_SHIFT) | NMK_GPIO_ALT_C)
+#define NMK_GPIO_ALT_C3	((3<<NMK_GPIO_ALT_CX_SHIFT) | NMK_GPIO_ALT_C)
+#define NMK_GPIO_ALT_C4	((4<<NMK_GPIO_ALT_CX_SHIFT) | NMK_GPIO_ALT_C)
 
 /* Pull up/down values */
 enum nmk_gpio_pull {
@@ -61,7 +68,14 @@ enum nmk_gpio_slpm {
 
 extern int nmk_gpio_set_slpm(int gpio, enum nmk_gpio_slpm mode);
 extern int nmk_gpio_set_pull(int gpio, enum nmk_gpio_pull pull);
+#ifdef CONFIG_PINCTRL_NOMADIK
 extern int nmk_gpio_set_mode(int gpio, int gpio_mode);
+#else
+static inline int nmk_gpio_set_mode(int gpio, int gpio_mode)
+{
+	return -ENODEV;
+}
+#endif
 extern int nmk_gpio_get_mode(int gpio);
 
 extern void nmk_gpio_wakeups_suspend(void);

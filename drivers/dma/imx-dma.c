@@ -28,7 +28,7 @@
 #include <linux/module.h>
 
 #include <asm/irq.h>
-#include <mach/dma.h>
+#include <linux/platform_data/dma-imx.h>
 #include <mach/hardware.h>
 
 #include "dmaengine.h"
@@ -172,7 +172,8 @@ struct imxdma_engine {
 	struct device_dma_parameters	dma_parms;
 	struct dma_device		dma_device;
 	void __iomem			*base;
-	struct clk			*dma_clk;
+	struct clk			*dma_ahb;
+	struct clk			*dma_ipg;
 	spinlock_t			lock;
 	struct imx_dma_2d_config	slots_2d[IMX_DMA_2D_SLOTS];
 	struct imxdma_channel		channel[IMX_DMA_CHANNELS];
@@ -227,7 +228,7 @@ static inline int imxdma_sg_next(struct imxdma_desc *d)
 	struct scatterlist *sg = d->sg;
 	unsigned long now;
 
-	now = min(d->len, sg->length);
+	now = min(d->len, sg_dma_len(sg));
 	if (d->len != IMX_DMA_LENGTH_LOOP)
 		d->len -= now;
 
@@ -571,11 +572,14 @@ static void imxdma_tasklet(unsigned long data)
 	if (desc->desc.callback)
 		desc->desc.callback(desc->desc.callback_param);
 
-	dma_cookie_complete(&desc->desc);
-
-	/* If we are dealing with a cyclic descriptor keep it on ld_active */
+	/* If we are dealing with a cyclic descriptor, keep it on ld_active
+	 * and dont mark the descriptor as complete.
+	 * Only in non-cyclic cases it would be marked as complete
+	 */
 	if (imxdma_chan_is_doing_cyclic(imxdmac))
 		goto out;
+	else
+		dma_cookie_complete(&desc->desc);
 
 	/* Free 2D slot if it was an interleaved transfer */
 	if (imxdmac->enabled_2d) {
@@ -760,16 +764,16 @@ static struct dma_async_tx_descriptor *imxdma_prep_slave_sg(
 	desc = list_first_entry(&imxdmac->ld_free, struct imxdma_desc, node);
 
 	for_each_sg(sgl, sg, sg_len, i) {
-		dma_length += sg->length;
+		dma_length += sg_dma_len(sg);
 	}
 
 	switch (imxdmac->word_size) {
 	case DMA_SLAVE_BUSWIDTH_4_BYTES:
-		if (sgl->length & 3 || sgl->dma_address & 3)
+		if (sg_dma_len(sgl) & 3 || sgl->dma_address & 3)
 			return NULL;
 		break;
 	case DMA_SLAVE_BUSWIDTH_2_BYTES:
-		if (sgl->length & 1 || sgl->dma_address & 1)
+		if (sg_dma_len(sgl) & 1 || sgl->dma_address & 1)
 			return NULL;
 		break;
 	case DMA_SLAVE_BUSWIDTH_1_BYTE:
@@ -797,7 +801,7 @@ static struct dma_async_tx_descriptor *imxdma_prep_slave_sg(
 static struct dma_async_tx_descriptor *imxdma_prep_dma_cyclic(
 		struct dma_chan *chan, dma_addr_t dma_addr, size_t buf_len,
 		size_t period_len, enum dma_transfer_direction direction,
-		void *context)
+		unsigned long flags, void *context)
 {
 	struct imxdma_channel *imxdmac = to_imxdma_chan(chan);
 	struct imxdma_engine *imxdma = imxdmac->imxdma;
@@ -828,13 +832,13 @@ static struct dma_async_tx_descriptor *imxdma_prep_dma_cyclic(
 		imxdmac->sg_list[i].page_link = 0;
 		imxdmac->sg_list[i].offset = 0;
 		imxdmac->sg_list[i].dma_address = dma_addr;
-		imxdmac->sg_list[i].length = period_len;
+		sg_dma_len(&imxdmac->sg_list[i]) = period_len;
 		dma_addr += period_len;
 	}
 
 	/* close the loop */
 	imxdmac->sg_list[periods].offset = 0;
-	imxdmac->sg_list[periods].length = 0;
+	sg_dma_len(&imxdmac->sg_list[periods]) = 0;
 	imxdmac->sg_list[periods].page_link =
 		((unsigned long)imxdmac->sg_list | 0x01) & ~0x02;
 
@@ -973,10 +977,20 @@ static int __init imxdma_probe(struct platform_device *pdev)
 		return 0;
 	}
 
-	imxdma->dma_clk = clk_get(NULL, "dma");
-	if (IS_ERR(imxdma->dma_clk))
-		return PTR_ERR(imxdma->dma_clk);
-	clk_enable(imxdma->dma_clk);
+	imxdma->dma_ipg = devm_clk_get(&pdev->dev, "ipg");
+	if (IS_ERR(imxdma->dma_ipg)) {
+		ret = PTR_ERR(imxdma->dma_ipg);
+		goto err_clk;
+	}
+
+	imxdma->dma_ahb = devm_clk_get(&pdev->dev, "ahb");
+	if (IS_ERR(imxdma->dma_ahb)) {
+		ret = PTR_ERR(imxdma->dma_ahb);
+		goto err_clk;
+	}
+
+	clk_prepare_enable(imxdma->dma_ipg);
+	clk_prepare_enable(imxdma->dma_ahb);
 
 	/* reset DMA module */
 	imx_dmav1_writel(imxdma, DCR_DRST, DMA_DCR);
@@ -985,16 +999,14 @@ static int __init imxdma_probe(struct platform_device *pdev)
 		ret = request_irq(MX1_DMA_INT, dma_irq_handler, 0, "DMA", imxdma);
 		if (ret) {
 			dev_warn(imxdma->dev, "Can't register IRQ for DMA\n");
-			kfree(imxdma);
-			return ret;
+			goto err_enable;
 		}
 
 		ret = request_irq(MX1_DMA_ERR, imxdma_err_handler, 0, "DMA", imxdma);
 		if (ret) {
 			dev_warn(imxdma->dev, "Can't register ERRIRQ for DMA\n");
 			free_irq(MX1_DMA_INT, NULL);
-			kfree(imxdma);
-			return ret;
+			goto err_enable;
 		}
 	}
 
@@ -1091,7 +1103,10 @@ err_init:
 		free_irq(MX1_DMA_INT, NULL);
 		free_irq(MX1_DMA_ERR, NULL);
 	}
-
+err_enable:
+	clk_disable_unprepare(imxdma->dma_ipg);
+	clk_disable_unprepare(imxdma->dma_ahb);
+err_clk:
 	kfree(imxdma);
 	return ret;
 }
@@ -1111,7 +1126,9 @@ static int __exit imxdma_remove(struct platform_device *pdev)
 		free_irq(MX1_DMA_ERR, NULL);
 	}
 
-        kfree(imxdma);
+	clk_disable_unprepare(imxdma->dma_ipg);
+	clk_disable_unprepare(imxdma->dma_ahb);
+	kfree(imxdma);
 
         return 0;
 }

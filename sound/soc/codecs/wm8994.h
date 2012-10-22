@@ -12,6 +12,7 @@
 #include <sound/soc.h>
 #include <linux/firmware.h>
 #include <linux/completion.h>
+#include <linux/workqueue.h>
 
 #include "wm_hubs.h"
 
@@ -27,10 +28,11 @@
 #define WM8994_FLL1 1
 #define WM8994_FLL2 2
 
-#define WM8994_FLL_SRC_MCLK1  1
-#define WM8994_FLL_SRC_MCLK2  2
-#define WM8994_FLL_SRC_LRCLK  3
-#define WM8994_FLL_SRC_BCLK   4
+#define WM8994_FLL_SRC_MCLK1    1
+#define WM8994_FLL_SRC_MCLK2    2
+#define WM8994_FLL_SRC_LRCLK    3
+#define WM8994_FLL_SRC_BCLK     4
+#define WM8994_FLL_SRC_INTERNAL 5
 
 enum wm8994_vmid_mode {
 	WM8994_VMID_NORMAL,
@@ -71,7 +73,6 @@ struct wm8994;
 struct wm8994_priv {
 	struct wm_hubs_data hubs;
 	struct wm8994 *wm8994;
-	struct snd_soc_codec *codec;
 	int sysclk[2];
 	int sysclk_rate[2];
 	int mclk[2];
@@ -79,6 +80,8 @@ struct wm8994_priv {
 	struct wm8994_fll_config fll[2], fll_suspend[2];
 	struct completion fll_locked[2];
 	bool fll_locked_irq;
+	bool fll_byp;
+	bool clk_has_run;
 
 	int vmid_refcount;
 	int active_refcount;
@@ -126,11 +129,13 @@ struct wm8994_priv {
 
 	struct mutex accdet_lock;
 	struct wm8994_micdet micdet[2];
+	struct delayed_work mic_work;
 	bool mic_detecting;
 	bool jack_mic;
 	int btn_mask;
 	bool jackdet;
 	int jackdet_mode;
+	struct delayed_work jackdet_bootstrap;
 
 	wm8958_micdet_cb jack_cb;
 	void *jack_cb_data;

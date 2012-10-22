@@ -44,7 +44,6 @@ typedef __kernel_uid32_t __compat_gid32_t;
 typedef __kernel_mode_t compat_mode_t;
 typedef __kernel_dev_t compat_dev_t;
 typedef __kernel_loff_t compat_loff_t;
-typedef __kernel_nlink_t compat_nlink_t;
 typedef __kernel_ipc_pid_t compat_ipc_pid_t;
 typedef __kernel_daddr_t compat_daddr_t;
 typedef __kernel_fsid_t	compat_fsid_t;
@@ -110,6 +109,68 @@ struct compat_flock64 {
 #define _COMPAT_NSIG_BPW	32
 
 typedef u32               compat_sigset_word;
+
+typedef union compat_sigval {
+	compat_int_t	sival_int;
+	compat_uptr_t	sival_ptr;
+} compat_sigval_t;
+
+#define COMPAT_SI_PAD_SIZE	(128/sizeof(int) - 3)
+
+typedef struct compat_siginfo {
+	int si_signo;
+	int si_errno;
+	int si_code;
+
+	union {
+		int _pad[COMPAT_SI_PAD_SIZE];
+
+		/* kill() */
+		struct {
+			unsigned int _pid;	/* sender's pid */
+			unsigned int _uid;	/* sender's uid */
+		} _kill;
+
+		/* POSIX.1b timers */
+		struct {
+			compat_timer_t _tid;	/* timer id */
+			int _overrun;		/* overrun count */
+			compat_sigval_t _sigval;	/* same as below */
+			int _sys_private;	/* not to be passed to user */
+			int _overrun_incr;	/* amount to add to overrun */
+		} _timer;
+
+		/* POSIX.1b signals */
+		struct {
+			unsigned int _pid;	/* sender's pid */
+			unsigned int _uid;	/* sender's uid */
+			compat_sigval_t _sigval;
+		} _rt;
+
+		/* SIGCHLD */
+		struct {
+			unsigned int _pid;	/* which child */
+			unsigned int _uid;	/* sender's uid */
+			int _status;		/* exit code */
+			compat_clock_t _utime;
+			compat_clock_t _stime;
+		} _sigchld;
+
+		/* SIGILL, SIGFPE, SIGSEGV, SIGBUS */
+		struct {
+			unsigned int _addr;	/* faulting insn/memory ref. */
+#ifdef __ARCH_SI_TRAPNO
+			int _trapno;	/* TRAP # which caused the signal */
+#endif
+		} _sigfault;
+
+		/* SIGPOLL */
+		struct {
+			int _band;	/* POLL_IN, POLL_OUT, POLL_MSG */
+			int _fd;
+		} _sigpoll;
+	} _sifields;
+} compat_siginfo_t;
 
 #define COMPAT_OFF_T_MAX	0x7fffffff
 #define COMPAT_LOFF_T_MAX	0x7fffffffffffffffL
@@ -241,9 +302,6 @@ long compat_sys_fallocate(int fd, int mode,
 			  u32 len_lo, u32 len_hi);
 long compat_sys_sched_rr_get_interval(compat_pid_t pid,
 				      struct compat_timespec __user *interval);
-
-/* Tilera Linux syscalls that don't have "compat" versions. */
-#define compat_sys_flush_cache sys_flush_cache
 
 /* These are the intvec_64.S trampolines. */
 long _compat_sys_execve(const char __user *path,

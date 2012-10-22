@@ -26,9 +26,12 @@
 #include <linux/netfilter/ipset/ip_set_timeout.h>
 #include <linux/netfilter/ipset/ip_set_bitmap.h>
 
+#define REVISION_MIN	0
+#define REVISION_MAX	0
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jozsef Kadlecsik <kadlec@blackhole.kfki.hu>");
-MODULE_DESCRIPTION("bitmap:ip,mac type of IP sets");
+IP_SET_MODULE_DESC("bitmap:ip,mac", REVISION_MIN, REVISION_MAX);
 MODULE_ALIAS("ip_set_bitmap:ip,mac");
 
 enum {
@@ -111,7 +114,7 @@ bitmap_ipmac_test(struct ip_set *set, void *value, u32 timeout, u32 flags)
 		return -EAGAIN;
 	case MAC_FILLED:
 		return data->ether == NULL ||
-		       compare_ether_addr(data->ether, elem->ether) == 0;
+		       ether_addr_equal(data->ether, elem->ether);
 	}
 	return 0;
 }
@@ -186,11 +189,12 @@ bitmap_ipmac_list(const struct ip_set *set,
 			} else
 				goto nla_put_failure;
 		}
-		NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP,
-				htonl(map->first_ip + id));
-		if (elem->match == MAC_FILLED)
-			NLA_PUT(skb, IPSET_ATTR_ETHER, ETH_ALEN,
-				elem->ether);
+		if (nla_put_ipaddr4(skb, IPSET_ATTR_IP,
+				    htonl(map->first_ip + id)) ||
+		    (elem->match == MAC_FILLED &&
+		     nla_put(skb, IPSET_ATTR_ETHER, ETH_ALEN,
+			     elem->ether)))
+			goto nla_put_failure;
 		ipset_nest_end(skb, nested);
 	}
 	ipset_nest_end(skb, atd);
@@ -224,7 +228,7 @@ bitmap_ipmac_ttest(struct ip_set *set, void *value, u32 timeout, u32 flags)
 		return -EAGAIN;
 	case MAC_FILLED:
 		return (data->ether == NULL ||
-			compare_ether_addr(data->ether, elem->ether) == 0) &&
+			ether_addr_equal(data->ether, elem->ether)) &&
 		       !bitmap_expired(map, data->id);
 	}
 	return 0;
@@ -314,14 +318,16 @@ bitmap_ipmac_tlist(const struct ip_set *set,
 			} else
 				goto nla_put_failure;
 		}
-		NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP,
-				htonl(map->first_ip + id));
-		if (elem->match == MAC_FILLED)
-			NLA_PUT(skb, IPSET_ATTR_ETHER, ETH_ALEN,
-				elem->ether);
+		if (nla_put_ipaddr4(skb, IPSET_ATTR_IP,
+				    htonl(map->first_ip + id)) ||
+		    (elem->match == MAC_FILLED &&
+		     nla_put(skb, IPSET_ATTR_ETHER, ETH_ALEN,
+			     elem->ether)))
+			goto nla_put_failure;
 		timeout = elem->match == MAC_UNSET ? elem->timeout
 				: ip_set_timeout_get(elem->timeout);
-		NLA_PUT_NET32(skb, IPSET_ATTR_TIMEOUT, htonl(timeout));
+		if (nla_put_net32(skb, IPSET_ATTR_TIMEOUT, htonl(timeout)))
+			goto nla_put_failure;
 		ipset_nest_end(skb, nested);
 	}
 	ipset_nest_end(skb, atd);
@@ -438,14 +444,16 @@ bitmap_ipmac_head(struct ip_set *set, struct sk_buff *skb)
 	nested = ipset_nest_start(skb, IPSET_ATTR_DATA);
 	if (!nested)
 		goto nla_put_failure;
-	NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP, htonl(map->first_ip));
-	NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP_TO, htonl(map->last_ip));
-	NLA_PUT_NET32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref - 1));
-	NLA_PUT_NET32(skb, IPSET_ATTR_MEMSIZE,
-		      htonl(sizeof(*map)
-			    + (map->last_ip - map->first_ip + 1) * map->dsize));
-	if (with_timeout(map->timeout))
-		NLA_PUT_NET32(skb, IPSET_ATTR_TIMEOUT, htonl(map->timeout));
+	if (nla_put_ipaddr4(skb, IPSET_ATTR_IP, htonl(map->first_ip)) ||
+	    nla_put_ipaddr4(skb, IPSET_ATTR_IP_TO, htonl(map->last_ip)) ||
+	    nla_put_net32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref - 1)) ||
+	    nla_put_net32(skb, IPSET_ATTR_MEMSIZE,
+			  htonl(sizeof(*map) +
+				((map->last_ip - map->first_ip + 1) *
+				 map->dsize))) ||
+	    (with_timeout(map->timeout) &&
+	     nla_put_net32(skb, IPSET_ATTR_TIMEOUT, htonl(map->timeout))))
+		goto nla_put_failure;
 	ipset_nest_end(skb, nested);
 
 	return 0;
@@ -552,7 +560,8 @@ static int
 bitmap_ipmac_create(struct ip_set *set, struct nlattr *tb[],
 		    u32 flags)
 {
-	u32 first_ip, last_ip, elements;
+	u32 first_ip, last_ip;
+	u64 elements;
 	struct bitmap_ipmac *map;
 	int ret;
 
@@ -583,7 +592,7 @@ bitmap_ipmac_create(struct ip_set *set, struct nlattr *tb[],
 	} else
 		return -IPSET_ERR_PROTOCOL;
 
-	elements = last_ip - first_ip + 1;
+	elements = (u64)last_ip - first_ip + 1;
 
 	if (elements > IPSET_BITMAP_MAX_RANGE + 1)
 		return -IPSET_ERR_BITMAP_RANGE_SIZE;
@@ -624,8 +633,8 @@ static struct ip_set_type bitmap_ipmac_type = {
 	.features	= IPSET_TYPE_IP | IPSET_TYPE_MAC,
 	.dimension	= IPSET_DIM_TWO,
 	.family		= NFPROTO_IPV4,
-	.revision_min	= 0,
-	.revision_max	= 0,
+	.revision_min	= REVISION_MIN,
+	.revision_max	= REVISION_MAX,
 	.create		= bitmap_ipmac_create,
 	.create_policy	= {
 		[IPSET_ATTR_IP]		= { .type = NLA_NESTED },

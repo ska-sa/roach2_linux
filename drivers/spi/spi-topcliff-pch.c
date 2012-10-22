@@ -505,7 +505,7 @@ static int pch_spi_transfer(struct spi_device *pspi, struct spi_message *pmsg)
 	}
 
 	if (unlikely(pspi->max_speed_hz == 0)) {
-		dev_err(&pspi->dev, "%s pch_spi_tranfer maxspeed=%d\n",
+		dev_err(&pspi->dev, "%s pch_spi_transfer maxspeed=%d\n",
 			__func__, pspi->max_speed_hz);
 		retval = -EINVAL;
 		goto err_out;
@@ -1438,7 +1438,6 @@ static int __devinit pch_spi_pd_probe(struct platform_device *plat_dev)
 		plat_dev->id, data->io_remap_addr);
 
 	/* initialize members of SPI master */
-	master->bus_num = -1;
 	master->num_chipselect = PCH_MAX_CS;
 	master->setup = pch_spi_setup;
 	master->transfer = pch_spi_transfer;
@@ -1537,8 +1536,6 @@ static int __devexit pch_spi_pd_remove(struct platform_device *plat_dev)
 
 	pci_iounmap(board_dat->pdev, data->io_remap_addr);
 	spi_unregister_master(data->master);
-	spi_master_put(data->master);
-	platform_set_drvdata(plat_dev, NULL);
 
 	return 0;
 }
@@ -1779,7 +1776,7 @@ static struct pci_driver pch_spi_pcidev_driver = {
 	.name = "pch_spi",
 	.id_table = pch_spi_pcidev_id,
 	.probe = pch_spi_probe,
-	.remove = pch_spi_remove,
+	.remove = __devexit_p(pch_spi_remove),
 	.suspend = pch_spi_suspend,
 	.resume = pch_spi_resume,
 };

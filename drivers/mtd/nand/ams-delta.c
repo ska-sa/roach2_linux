@@ -23,11 +23,15 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
 #include <linux/mtd/partitions.h>
-#include <asm/io.h>
-#include <mach/hardware.h>
-#include <asm/sizes.h>
 #include <linux/gpio.h>
-#include <plat/board-ams-delta.h>
+#include <linux/platform_data/gpio-omap.h>
+
+#include <asm/io.h>
+#include <asm/sizes.h>
+
+#include <mach/board-ams-delta.h>
+
+#include <mach/hardware.h>
 
 /*
  * MTD structure for E3 (Delta)
@@ -101,18 +105,6 @@ static void ams_delta_read_buf(struct mtd_info *mtd, u_char *buf, int len)
 
 	for (i=0; i<len; i++)
 		buf[i] = ams_delta_read_byte(mtd);
-}
-
-static int ams_delta_verify_buf(struct mtd_info *mtd, const u_char *buf,
-				int len)
-{
-	int i;
-
-	for (i=0; i<len; i++)
-		if (buf[i] != ams_delta_read_byte(mtd))
-			return -EFAULT;
-
-	return 0;
 }
 
 /*
@@ -212,18 +204,17 @@ static int __devinit ams_delta_init(struct platform_device *pdev)
 	/* Link the private data with the MTD structure */
 	ams_delta_mtd->priv = this;
 
-	if (!request_mem_region(res->start, resource_size(res),
-			dev_name(&pdev->dev))) {
-		dev_err(&pdev->dev, "request_mem_region failed\n");
-		err = -EBUSY;
-		goto out_free;
-	}
+	/*
+	 * Don't try to request the memory region from here,
+	 * it should have been already requested from the
+	 * gpio-omap driver and requesting it again would fail.
+	 */
 
 	io_base = ioremap(res->start, resource_size(res));
 	if (io_base == NULL) {
 		dev_err(&pdev->dev, "ioremap failed\n");
 		err = -EIO;
-		goto out_release_io;
+		goto out_free;
 	}
 
 	this->priv = io_base;
@@ -234,7 +225,6 @@ static int __devinit ams_delta_init(struct platform_device *pdev)
 	this->read_byte = ams_delta_read_byte;
 	this->write_buf = ams_delta_write_buf;
 	this->read_buf = ams_delta_read_buf;
-	this->verify_buf = ams_delta_verify_buf;
 	this->cmd_ctrl = ams_delta_hwcontrol;
 	if (gpio_request(AMS_DELTA_GPIO_PIN_NAND_RB, "nand_rdy") == 0) {
 		this->dev_ready = ams_delta_nand_ready;
@@ -271,8 +261,6 @@ out_gpio:
 	platform_set_drvdata(pdev, NULL);
 	gpio_free(AMS_DELTA_GPIO_PIN_NAND_RB);
 	iounmap(io_base);
-out_release_io:
-	release_mem_region(res->start, resource_size(res));
 out_free:
 	kfree(ams_delta_mtd);
  out:
@@ -285,7 +273,6 @@ out_free:
 static int __devexit ams_delta_cleanup(struct platform_device *pdev)
 {
 	void __iomem *io_base = platform_get_drvdata(pdev);
-	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
 	/* Release resources, unregister device */
 	nand_release(ams_delta_mtd);
@@ -293,7 +280,6 @@ static int __devexit ams_delta_cleanup(struct platform_device *pdev)
 	gpio_free_array(_mandatory_gpio, ARRAY_SIZE(_mandatory_gpio));
 	gpio_free(AMS_DELTA_GPIO_PIN_NAND_RB);
 	iounmap(io_base);
-	release_mem_region(res->start, resource_size(res));
 
 	/* Free the MTD device structure */
 	kfree(ams_delta_mtd);

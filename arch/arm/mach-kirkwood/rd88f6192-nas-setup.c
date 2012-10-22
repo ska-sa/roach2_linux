@@ -16,10 +16,10 @@
 #include <linux/gpio.h>
 #include <linux/spi/flash.h>
 #include <linux/spi/spi.h>
-#include <linux/spi/orion_spi.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <mach/kirkwood.h>
+#include <plat/orion-gpio.h>
 #include "common.h"
 
 #define RD88F6192_GPIO_USB_VBUS		10

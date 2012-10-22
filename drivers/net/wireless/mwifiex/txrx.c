@@ -51,6 +51,9 @@ int mwifiex_handle_rx_packet(struct mwifiex_adapter *adapter,
 	rx_info->bss_num = priv->bss_num;
 	rx_info->bss_type = priv->bss_type;
 
+	if (priv->bss_role == MWIFIEX_BSS_ROLE_UAP)
+		return mwifiex_process_uap_rx_packet(adapter, skb);
+
 	return mwifiex_process_sta_rx_packet(adapter, skb);
 }
 EXPORT_SYMBOL_GPL(mwifiex_handle_rx_packet);
@@ -72,17 +75,32 @@ int mwifiex_process_tx(struct mwifiex_private *priv, struct sk_buff *skb,
 	u8 *head_ptr;
 	struct txpd *local_tx_pd = NULL;
 
-	head_ptr = mwifiex_process_sta_txpd(priv, skb);
+	if (priv->bss_role == MWIFIEX_BSS_ROLE_UAP)
+		head_ptr = mwifiex_process_uap_txpd(priv, skb);
+	else
+		head_ptr = mwifiex_process_sta_txpd(priv, skb);
+
 	if (head_ptr) {
 		if (GET_BSS_ROLE(priv) == MWIFIEX_BSS_ROLE_STA)
 			local_tx_pd =
 				(struct txpd *) (head_ptr + INTF_HEADER_LEN);
-
-		ret = adapter->if_ops.host_to_card(adapter, MWIFIEX_TYPE_DATA,
-						   skb, tx_param);
+		if (adapter->iface_type == MWIFIEX_USB) {
+			adapter->data_sent = true;
+			skb_pull(skb, INTF_HEADER_LEN);
+			ret = adapter->if_ops.host_to_card(adapter,
+							   MWIFIEX_USB_EP_DATA,
+							   skb, NULL);
+		} else {
+			ret = adapter->if_ops.host_to_card(adapter,
+							   MWIFIEX_TYPE_DATA,
+							   skb, tx_param);
+		}
 	}
 
 	switch (ret) {
+	case -ENOSR:
+		dev_err(adapter->dev, "data: -ENOSR is returned\n");
+		break;
 	case -EBUSY:
 		if ((GET_BSS_ROLE(priv) == MWIFIEX_BSS_ROLE_STA) &&
 		    (adapter->pps_uapsd_mode) && (adapter->tx_lock_flag)) {
@@ -135,6 +153,9 @@ int mwifiex_write_data_complete(struct mwifiex_adapter *adapter,
 	if (!priv)
 		goto done;
 
+	if (adapter->iface_type == MWIFIEX_USB)
+		adapter->data_sent = false;
+
 	mwifiex_set_trans_start(priv->netdev);
 	if (!status) {
 		priv->stats.tx_packets++;
@@ -143,23 +164,22 @@ int mwifiex_write_data_complete(struct mwifiex_adapter *adapter,
 		priv->stats.tx_errors++;
 	}
 
+	if (tx_info->flags & MWIFIEX_BUF_FLAG_BRIDGED_PKT)
+		atomic_dec_return(&adapter->pending_bridged_pkts);
 	if (atomic_dec_return(&adapter->tx_pending) >= LOW_TX_PENDING)
 		goto done;
 
 	for (i = 0; i < adapter->priv_num; i++) {
-
 		tpriv = adapter->priv[i];
 
-		if ((GET_BSS_ROLE(tpriv) == MWIFIEX_BSS_ROLE_STA) &&
-		    (tpriv->media_connected)) {
-			if (netif_queue_stopped(tpriv->netdev))
-				mwifiex_wake_up_net_dev_queue(tpriv->netdev,
-							      adapter);
-		}
+		if (tpriv->media_connected &&
+		    netif_queue_stopped(tpriv->netdev))
+			mwifiex_wake_up_net_dev_queue(tpriv->netdev, adapter);
 	}
 done:
 	dev_kfree_skb_any(skb);
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(mwifiex_write_data_complete);
 

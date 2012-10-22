@@ -22,9 +22,12 @@
 #define IP_SET_BITMAP_TIMEOUT
 #include <linux/netfilter/ipset/ip_set_timeout.h>
 
+#define REVISION_MIN	0
+#define REVISION_MAX	0
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jozsef Kadlecsik <kadlec@blackhole.kfki.hu>");
-MODULE_DESCRIPTION("bitmap:port type of IP sets");
+IP_SET_MODULE_DESC("bitmap:port", REVISION_MIN, REVISION_MAX);
 MODULE_ALIAS("ip_set_bitmap:port");
 
 /* Type structure */
@@ -96,8 +99,9 @@ bitmap_port_list(const struct ip_set *set,
 			} else
 				goto nla_put_failure;
 		}
-		NLA_PUT_NET16(skb, IPSET_ATTR_PORT,
-			      htons(map->first_port + id));
+		if (nla_put_net16(skb, IPSET_ATTR_PORT,
+				  htons(map->first_port + id)))
+			goto nla_put_failure;
 		ipset_nest_end(skb, nested);
 	}
 	ipset_nest_end(skb, atd);
@@ -183,10 +187,11 @@ bitmap_port_tlist(const struct ip_set *set,
 			} else
 				goto nla_put_failure;
 		}
-		NLA_PUT_NET16(skb, IPSET_ATTR_PORT,
-			      htons(map->first_port + id));
-		NLA_PUT_NET32(skb, IPSET_ATTR_TIMEOUT,
-			      htonl(ip_set_timeout_get(members[id])));
+		if (nla_put_net16(skb, IPSET_ATTR_PORT,
+				  htons(map->first_port + id)) ||
+		    nla_put_net32(skb, IPSET_ATTR_TIMEOUT,
+				  htonl(ip_set_timeout_get(members[id]))))
+			goto nla_put_failure;
 		ipset_nest_end(skb, nested);
 	}
 	ipset_nest_end(skb, adt);
@@ -320,13 +325,14 @@ bitmap_port_head(struct ip_set *set, struct sk_buff *skb)
 	nested = ipset_nest_start(skb, IPSET_ATTR_DATA);
 	if (!nested)
 		goto nla_put_failure;
-	NLA_PUT_NET16(skb, IPSET_ATTR_PORT, htons(map->first_port));
-	NLA_PUT_NET16(skb, IPSET_ATTR_PORT_TO, htons(map->last_port));
-	NLA_PUT_NET32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref - 1));
-	NLA_PUT_NET32(skb, IPSET_ATTR_MEMSIZE,
-		      htonl(sizeof(*map) + map->memsize));
-	if (with_timeout(map->timeout))
-		NLA_PUT_NET32(skb, IPSET_ATTR_TIMEOUT, htonl(map->timeout));
+	if (nla_put_net16(skb, IPSET_ATTR_PORT, htons(map->first_port)) ||
+	    nla_put_net16(skb, IPSET_ATTR_PORT_TO, htons(map->last_port)) ||
+	    nla_put_net32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref - 1)) ||
+	    nla_put_net32(skb, IPSET_ATTR_MEMSIZE,
+			  htonl(sizeof(*map) + map->memsize)) ||
+	    (with_timeout(map->timeout) &&
+	     nla_put_net32(skb, IPSET_ATTR_TIMEOUT, htonl(map->timeout))))
+		goto nla_put_failure;
 	ipset_nest_end(skb, nested);
 
 	return 0;
@@ -484,8 +490,8 @@ static struct ip_set_type bitmap_port_type = {
 	.features	= IPSET_TYPE_PORT,
 	.dimension	= IPSET_DIM_ONE,
 	.family		= NFPROTO_UNSPEC,
-	.revision_min	= 0,
-	.revision_max	= 0,
+	.revision_min	= REVISION_MIN,
+	.revision_max	= REVISION_MAX,
 	.create		= bitmap_port_create,
 	.create_policy	= {
 		[IPSET_ATTR_PORT]	= { .type = NLA_U16 },

@@ -17,6 +17,7 @@
  */
 
 #include <linux/gpio.h>
+#include <linux/platform_data/gpio-omap.h>
 
 #define OMAP1610_GPIO1_BASE		0xfffbe400
 #define OMAP1610_GPIO2_BASE		0xfffbec00
@@ -52,7 +53,6 @@ static struct omap_gpio_reg_offs omap16xx_mpuio_regs = {
 };
 
 static struct __initdata omap_gpio_platform_data omap16xx_mpu_gpio_config = {
-	.virtual_irq_start	= IH_MPUIO_BASE,
 	.is_mpuio		= true,
 	.bank_width		= 16,
 	.bank_stride		= 1,
@@ -99,7 +99,6 @@ static struct omap_gpio_reg_offs omap16xx_gpio_regs = {
 };
 
 static struct __initdata omap_gpio_platform_data omap16xx_gpio1_config = {
-	.virtual_irq_start	= IH_GPIO_BASE,
 	.bank_width		= 16,
 	.regs                   = &omap16xx_gpio_regs,
 };
@@ -128,7 +127,6 @@ static struct __initdata resource omap16xx_gpio2_resources[] = {
 };
 
 static struct __initdata omap_gpio_platform_data omap16xx_gpio2_config = {
-	.virtual_irq_start	= IH_GPIO_BASE + 16,
 	.bank_width		= 16,
 	.regs                   = &omap16xx_gpio_regs,
 };
@@ -157,7 +155,6 @@ static struct __initdata resource omap16xx_gpio3_resources[] = {
 };
 
 static struct __initdata omap_gpio_platform_data omap16xx_gpio3_config = {
-	.virtual_irq_start	= IH_GPIO_BASE + 32,
 	.bank_width		= 16,
 	.regs                   = &omap16xx_gpio_regs,
 };
@@ -186,7 +183,6 @@ static struct __initdata resource omap16xx_gpio4_resources[] = {
 };
 
 static struct __initdata omap_gpio_platform_data omap16xx_gpio4_config = {
-	.virtual_irq_start	= IH_GPIO_BASE + 48,
 	.bank_width		= 16,
 	.regs                   = &omap16xx_gpio_regs,
 };

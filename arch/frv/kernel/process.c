@@ -25,6 +25,7 @@
 #include <linux/reboot.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
+#include <linux/rcupdate.h>
 
 #include <asm/asm-offsets.h>
 #include <asm/uaccess.h>
@@ -37,26 +38,12 @@
 #include "local.h"
 
 asmlinkage void ret_from_fork(void);
+asmlinkage void ret_from_kernel_thread(void);
 
 #include <asm/pgalloc.h>
 
 void (*pm_power_off)(void);
 EXPORT_SYMBOL(pm_power_off);
-
-struct task_struct *alloc_task_struct_node(int node)
-{
-	struct task_struct *p = kmalloc_node(THREAD_SIZE, GFP_KERNEL, node);
-
-	if (p)
-		atomic_set((atomic_t *)(p+1), 1);
-	return p;
-}
-
-void free_task_struct(struct task_struct *p)
-{
-	if (atomic_dec_and_test((atomic_t *)(p+1)))
-		kfree(p);
-}
 
 static void core_sleep_idle(void)
 {
@@ -84,12 +71,14 @@ void cpu_idle(void)
 {
 	/* endless idle loop with no priority at all */
 	while (1) {
+		rcu_idle_enter();
 		while (!need_resched()) {
 			check_pgt_cache();
 
 			if (!frv_dma_inprogress && idle)
 				idle();
 		}
+		rcu_idle_exit();
 
 		schedule_preempt_disabled();
 	}
@@ -180,47 +169,17 @@ asmlinkage int sys_clone(unsigned long clone_flags, unsigned long newsp,
 	return do_fork(clone_flags, newsp, __frame, 0, parent_tidptr, child_tidptr);
 } /* end sys_clone() */
 
-/*****************************************************************************/
-/*
- * This gets called before we allocate a new thread and copy
- * the current task into it.
- */
-void prepare_to_copy(struct task_struct *tsk)
-{
-	//unlazy_fpu(tsk);
-} /* end prepare_to_copy() */
-
-/*****************************************************************************/
 /*
  * set up the kernel stack and exception frames for a new process
  */
 int copy_thread(unsigned long clone_flags,
-		unsigned long usp, unsigned long topstk,
+		unsigned long usp, unsigned long arg,
 		struct task_struct *p, struct pt_regs *regs)
 {
-	struct pt_regs *childregs0, *childregs, *regs0;
+	struct pt_regs *childregs;
 
-	regs0 = __kernel_frame0_ptr;
-	childregs0 = (struct pt_regs *)
+	childregs = (struct pt_regs *)
 		(task_stack_page(p) + THREAD_SIZE - FRV_FRAME0_SIZE);
-	childregs = childregs0;
-
-	/* set up the userspace frame (the only place that the USP is stored) */
-	*childregs0 = *regs0;
-
-	childregs0->gr8		= 0;
-	childregs0->sp		= usp;
-	childregs0->next_frame	= NULL;
-
-	/* set up the return kernel frame if called from kernel_thread() */
-	if (regs != regs0) {
-		childregs--;
-		*childregs = *regs;
-		childregs->sp = (unsigned long) childregs0;
-		childregs->next_frame = childregs0;
-		childregs->gr15 = (unsigned long) task_thread_info(p);
-		childregs->gr29 = (unsigned long) p;
-	}
 
 	p->set_child_tid = p->clear_child_tid = NULL;
 
@@ -229,8 +188,25 @@ int copy_thread(unsigned long clone_flags,
 	p->thread.sp	 = (unsigned long) childregs;
 	p->thread.fp	 = 0;
 	p->thread.lr	 = 0;
-	p->thread.pc	 = (unsigned long) ret_from_fork;
-	p->thread.frame0 = childregs0;
+	p->thread.frame0 = childregs;
+
+	if (unlikely(!regs)) {
+		memset(childregs, 0, sizeof(struct pt_regs));
+		childregs->gr9 = usp; /* function */
+		childregs->gr8 = arg;
+		childregs->psr = PSR_S;
+		p->thread.pc = (unsigned long) ret_from_kernel_thread;
+		save_user_regs(p->thread.user);
+		return 0;
+	}
+
+	/* set up the userspace frame (the only place that the USP is stored) */
+	*childregs = *regs;
+
+	childregs->sp		= usp;
+	childregs->next_frame	= NULL;
+
+	p->thread.pc = (unsigned long) ret_from_fork;
 
 	/* the new TLS pointer is passed in as arg #5 to sys_clone() */
 	if (clone_flags & CLONE_SETTLS)
@@ -240,25 +216,6 @@ int copy_thread(unsigned long clone_flags,
 
 	return 0;
 } /* end copy_thread() */
-
-/*
- * sys_execve() executes a new program.
- */
-asmlinkage int sys_execve(const char __user *name,
-			  const char __user *const __user *argv,
-			  const char __user *const __user *envp)
-{
-	int error;
-	char * filename;
-
-	filename = getname(name);
-	error = PTR_ERR(filename);
-	if (IS_ERR(filename))
-		return error;
-	error = do_execve(filename, argv, envp, __frame);
-	putname(filename);
-	return error;
-}
 
 unsigned long get_wchan(struct task_struct *p)
 {

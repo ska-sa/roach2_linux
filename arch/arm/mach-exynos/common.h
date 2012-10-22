@@ -14,11 +14,19 @@
 
 extern struct sys_timer exynos4_timer;
 
+struct map_desc;
 void exynos_init_io(struct map_desc *mach_desc, int size);
 void exynos4_init_irq(void);
 void exynos5_init_irq(void);
 void exynos4_restart(char mode, const char *cmd);
 void exynos5_restart(char mode, const char *cmd);
+void exynos_init_late(void);
+
+#ifdef CONFIG_PM_GENERIC_DOMAINS
+int exynos_pm_late_initcall(void);
+#else
+static int exynos_pm_late_initcall(void) { return 0; }
+#endif
 
 #ifdef CONFIG_ARCH_EXYNOS4
 void exynos4_register_clocks(void);
@@ -51,5 +59,9 @@ void exynos4212_register_clocks(void);
 #else
 #define exynos4212_register_clocks()
 #endif
+
+extern struct smp_operations exynos_smp_ops;
+
+extern void exynos_cpu_die(unsigned int cpu);
 
 #endif /* __ARCH_ARM_MACH_EXYNOS_COMMON_H */

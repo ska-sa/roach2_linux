@@ -48,8 +48,10 @@
 #include <linux/io.h>
 #include <linux/of.h>
 
+#include <linux/usb/otg.h>
+#include <linux/usb/nop-usb-xceiv.h>
+
 #include "core.h"
-#include "io.h"
 
 /*
  * All these registers belong to OMAP's Wrapper around the
@@ -132,6 +134,8 @@ struct dwc3_omap {
 	spinlock_t		lock;
 
 	struct platform_device	*dwc3;
+	struct platform_device	*usb2_phy;
+	struct platform_device	*usb3_phy;
 	struct device		*dev;
 
 	int			irq;
@@ -143,6 +147,70 @@ struct dwc3_omap {
 	u32			dma_status:1;
 };
 
+static inline u32 dwc3_omap_readl(void __iomem *base, u32 offset)
+{
+	return readl(base + offset);
+}
+
+static inline void dwc3_omap_writel(void __iomem *base, u32 offset, u32 value)
+{
+	writel(value, base + offset);
+}
+
+static int __devinit dwc3_omap_register_phys(struct dwc3_omap *omap)
+{
+	struct nop_usb_xceiv_platform_data pdata;
+	struct platform_device	*pdev;
+	int			ret;
+
+	memset(&pdata, 0x00, sizeof(pdata));
+
+	pdev = platform_device_alloc("nop_usb_xceiv", 0);
+	if (!pdev)
+		return -ENOMEM;
+
+	omap->usb2_phy = pdev;
+	pdata.type = USB_PHY_TYPE_USB2;
+
+	ret = platform_device_add_data(omap->usb2_phy, &pdata, sizeof(pdata));
+	if (ret)
+		goto err1;
+
+	pdev = platform_device_alloc("nop_usb_xceiv", 1);
+	if (!pdev) {
+		ret = -ENOMEM;
+		goto err1;
+	}
+
+	omap->usb3_phy = pdev;
+	pdata.type = USB_PHY_TYPE_USB3;
+
+	ret = platform_device_add_data(omap->usb3_phy, &pdata, sizeof(pdata));
+	if (ret)
+		goto err2;
+
+	ret = platform_device_add(omap->usb2_phy);
+	if (ret)
+		goto err2;
+
+	ret = platform_device_add(omap->usb3_phy);
+	if (ret)
+		goto err3;
+
+	return 0;
+
+err3:
+	platform_device_del(omap->usb2_phy);
+
+err2:
+	platform_device_put(omap->usb3_phy);
+
+err1:
+	platform_device_put(omap->usb2_phy);
+
+	return ret;
+}
+
 static irqreturn_t dwc3_omap_interrupt(int irq, void *_omap)
 {
 	struct dwc3_omap	*omap = _omap;
@@ -150,7 +218,7 @@ static irqreturn_t dwc3_omap_interrupt(int irq, void *_omap)
 
 	spin_lock(&omap->lock);
 
-	reg = dwc3_readl(omap->base, USBOTGSS_IRQSTATUS_1);
+	reg = dwc3_omap_readl(omap->base, USBOTGSS_IRQSTATUS_1);
 
 	if (reg & USBOTGSS_IRQ1_DMADISABLECLR) {
 		dev_dbg(omap->dev, "DMA Disable was Cleared\n");
@@ -184,10 +252,10 @@ static irqreturn_t dwc3_omap_interrupt(int irq, void *_omap)
 	if (reg & USBOTGSS_IRQ1_IDPULLUP_FALL)
 		dev_dbg(omap->dev, "IDPULLUP Fall\n");
 
-	dwc3_writel(omap->base, USBOTGSS_IRQSTATUS_1, reg);
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQSTATUS_1, reg);
 
-	reg = dwc3_readl(omap->base, USBOTGSS_IRQSTATUS_0);
-	dwc3_writel(omap->base, USBOTGSS_IRQSTATUS_0, reg);
+	reg = dwc3_omap_readl(omap->base, USBOTGSS_IRQSTATUS_0);
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQSTATUS_0, reg);
 
 	spin_unlock(&omap->lock);
 
@@ -241,6 +309,12 @@ static int __devinit dwc3_omap_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	ret = dwc3_omap_register_phys(omap);
+	if (ret) {
+		dev_err(dev, "couldn't register PHYs\n");
+		return ret;
+	}
+
 	devid = dwc3_get_device_id();
 	if (devid < 0)
 		return -ENODEV;
@@ -270,7 +344,7 @@ static int __devinit dwc3_omap_probe(struct platform_device *pdev)
 	omap->base	= base;
 	omap->dwc3	= dwc3;
 
-	reg = dwc3_readl(omap->base, USBOTGSS_UTMI_OTG_STATUS);
+	reg = dwc3_omap_readl(omap->base, USBOTGSS_UTMI_OTG_STATUS);
 
 	utmi_mode = of_get_property(node, "utmi-mode", &size);
 	if (utmi_mode && size == sizeof(*utmi_mode)) {
@@ -293,10 +367,10 @@ static int __devinit dwc3_omap_probe(struct platform_device *pdev)
 		}
 	}
 
-	dwc3_writel(omap->base, USBOTGSS_UTMI_OTG_STATUS, reg);
+	dwc3_omap_writel(omap->base, USBOTGSS_UTMI_OTG_STATUS, reg);
 
 	/* check the DMA Status */
-	reg = dwc3_readl(omap->base, USBOTGSS_SYSCONFIG);
+	reg = dwc3_omap_readl(omap->base, USBOTGSS_SYSCONFIG);
 	omap->dma_status = !!(reg & USBOTGSS_SYSCONFIG_DMADISABLE);
 
 	/* Set No-Idle and No-Standby */
@@ -306,7 +380,7 @@ static int __devinit dwc3_omap_probe(struct platform_device *pdev)
 	reg |= (USBOTGSS_SYSCONFIG_STANDBYMODE(USBOTGSS_STANDBYMODE_NO_STANDBY)
 		| USBOTGSS_SYSCONFIG_IDLEMODE(USBOTGSS_IDLEMODE_NO_IDLE));
 
-	dwc3_writel(omap->base, USBOTGSS_SYSCONFIG, reg);
+	dwc3_omap_writel(omap->base, USBOTGSS_SYSCONFIG, reg);
 
 	ret = devm_request_irq(dev, omap->irq, dwc3_omap_interrupt, 0,
 			"dwc3-omap", omap);
@@ -318,7 +392,7 @@ static int __devinit dwc3_omap_probe(struct platform_device *pdev)
 
 	/* enable all IRQs */
 	reg = USBOTGSS_IRQO_COREIRQ_ST;
-	dwc3_writel(omap->base, USBOTGSS_IRQENABLE_SET_0, reg);
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_0, reg);
 
 	reg = (USBOTGSS_IRQ1_OEVT |
 			USBOTGSS_IRQ1_DRVVBUS_RISE |
@@ -330,7 +404,7 @@ static int __devinit dwc3_omap_probe(struct platform_device *pdev)
 			USBOTGSS_IRQ1_DISCHRGVBUS_FALL |
 			USBOTGSS_IRQ1_IDPULLUP_FALL);
 
-	dwc3_writel(omap->base, USBOTGSS_IRQENABLE_SET_1, reg);
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_1, reg);
 
 	ret = platform_device_add_resources(dwc3, pdev->resource,
 			pdev->num_resources);
@@ -361,6 +435,8 @@ static int __devexit dwc3_omap_remove(struct platform_device *pdev)
 	struct dwc3_omap	*omap = platform_get_drvdata(pdev);
 
 	platform_device_unregister(omap->dwc3);
+	platform_device_unregister(omap->usb2_phy);
+	platform_device_unregister(omap->usb3_phy);
 
 	dwc3_put_device_id(omap->dwc3->id);
 

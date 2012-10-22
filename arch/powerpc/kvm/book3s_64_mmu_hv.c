@@ -36,72 +36,131 @@
 
 /* POWER7 has 10-bit LPIDs, PPC970 has 6-bit LPIDs */
 #define MAX_LPID_970	63
-#define NR_LPIDS	(LPID_RSVD + 1)
-unsigned long lpid_inuse[BITS_TO_LONGS(NR_LPIDS)];
 
-long kvmppc_alloc_hpt(struct kvm *kvm)
+/* Power architecture requires HPT is at least 256kB */
+#define PPC_MIN_HPT_ORDER	18
+
+long kvmppc_alloc_hpt(struct kvm *kvm, u32 *htab_orderp)
 {
 	unsigned long hpt;
-	unsigned long lpid;
 	struct revmap_entry *rev;
 	struct kvmppc_linear_info *li;
+	long order = kvm_hpt_order;
 
-	/* Allocate guest's hashed page table */
-	li = kvm_alloc_hpt();
-	if (li) {
-		/* using preallocated memory */
-		hpt = (ulong)li->base_virt;
-		kvm->arch.hpt_li = li;
-	} else {
-		/* using dynamic memory */
+	if (htab_orderp) {
+		order = *htab_orderp;
+		if (order < PPC_MIN_HPT_ORDER)
+			order = PPC_MIN_HPT_ORDER;
+	}
+
+	/*
+	 * If the user wants a different size from default,
+	 * try first to allocate it from the kernel page allocator.
+	 */
+	hpt = 0;
+	if (order != kvm_hpt_order) {
 		hpt = __get_free_pages(GFP_KERNEL|__GFP_ZERO|__GFP_REPEAT|
-				       __GFP_NOWARN, HPT_ORDER - PAGE_SHIFT);
+				       __GFP_NOWARN, order - PAGE_SHIFT);
+		if (!hpt)
+			--order;
 	}
 
+	/* Next try to allocate from the preallocated pool */
 	if (!hpt) {
-		pr_err("kvm_alloc_hpt: Couldn't alloc HPT\n");
-		return -ENOMEM;
+		li = kvm_alloc_hpt();
+		if (li) {
+			hpt = (ulong)li->base_virt;
+			kvm->arch.hpt_li = li;
+			order = kvm_hpt_order;
+		}
 	}
+
+	/* Lastly try successively smaller sizes from the page allocator */
+	while (!hpt && order > PPC_MIN_HPT_ORDER) {
+		hpt = __get_free_pages(GFP_KERNEL|__GFP_ZERO|__GFP_REPEAT|
+				       __GFP_NOWARN, order - PAGE_SHIFT);
+		if (!hpt)
+			--order;
+	}
+
+	if (!hpt)
+		return -ENOMEM;
+
 	kvm->arch.hpt_virt = hpt;
+	kvm->arch.hpt_order = order;
+	/* HPTEs are 2**4 bytes long */
+	kvm->arch.hpt_npte = 1ul << (order - 4);
+	/* 128 (2**7) bytes in each HPTEG */
+	kvm->arch.hpt_mask = (1ul << (order - 7)) - 1;
 
 	/* Allocate reverse map array */
-	rev = vmalloc(sizeof(struct revmap_entry) * HPT_NPTE);
+	rev = vmalloc(sizeof(struct revmap_entry) * kvm->arch.hpt_npte);
 	if (!rev) {
 		pr_err("kvmppc_alloc_hpt: Couldn't alloc reverse map array\n");
 		goto out_freehpt;
 	}
 	kvm->arch.revmap = rev;
+	kvm->arch.sdr1 = __pa(hpt) | (order - 18);
 
-	/* Allocate the guest's logical partition ID */
-	do {
-		lpid = find_first_zero_bit(lpid_inuse, NR_LPIDS);
-		if (lpid >= NR_LPIDS) {
-			pr_err("kvm_alloc_hpt: No LPIDs free\n");
-			goto out_freeboth;
-		}
-	} while (test_and_set_bit(lpid, lpid_inuse));
+	pr_info("KVM guest htab at %lx (order %ld), LPID %x\n",
+		hpt, order, kvm->arch.lpid);
 
-	kvm->arch.sdr1 = __pa(hpt) | (HPT_ORDER - 18);
-	kvm->arch.lpid = lpid;
-
-	pr_info("KVM guest htab at %lx, LPID %lx\n", hpt, lpid);
+	if (htab_orderp)
+		*htab_orderp = order;
 	return 0;
 
- out_freeboth:
-	vfree(rev);
  out_freehpt:
-	free_pages(hpt, HPT_ORDER - PAGE_SHIFT);
+	if (kvm->arch.hpt_li)
+		kvm_release_hpt(kvm->arch.hpt_li);
+	else
+		free_pages(hpt, order - PAGE_SHIFT);
 	return -ENOMEM;
+}
+
+long kvmppc_alloc_reset_hpt(struct kvm *kvm, u32 *htab_orderp)
+{
+	long err = -EBUSY;
+	long order;
+
+	mutex_lock(&kvm->lock);
+	if (kvm->arch.rma_setup_done) {
+		kvm->arch.rma_setup_done = 0;
+		/* order rma_setup_done vs. vcpus_running */
+		smp_mb();
+		if (atomic_read(&kvm->arch.vcpus_running)) {
+			kvm->arch.rma_setup_done = 1;
+			goto out;
+		}
+	}
+	if (kvm->arch.hpt_virt) {
+		order = kvm->arch.hpt_order;
+		/* Set the entire HPT to 0, i.e. invalid HPTEs */
+		memset((void *)kvm->arch.hpt_virt, 0, 1ul << order);
+		/*
+		 * Set the whole last_vcpu array to an invalid vcpu number.
+		 * This ensures that each vcpu will flush its TLB on next entry.
+		 */
+		memset(kvm->arch.last_vcpu, 0xff, sizeof(kvm->arch.last_vcpu));
+		*htab_orderp = order;
+		err = 0;
+	} else {
+		err = kvmppc_alloc_hpt(kvm, htab_orderp);
+		order = *htab_orderp;
+	}
+ out:
+	mutex_unlock(&kvm->lock);
+	return err;
 }
 
 void kvmppc_free_hpt(struct kvm *kvm)
 {
-	clear_bit(kvm->arch.lpid, lpid_inuse);
+	kvmppc_free_lpid(kvm->arch.lpid);
 	vfree(kvm->arch.revmap);
 	if (kvm->arch.hpt_li)
 		kvm_release_hpt(kvm->arch.hpt_li);
 	else
-		free_pages(kvm->arch.hpt_virt, HPT_ORDER - PAGE_SHIFT);
+		free_pages(kvm->arch.hpt_virt,
+			   kvm->arch.hpt_order - PAGE_SHIFT);
 }
 
 /* Bits in first HPTE dword for pagesize 4k, 64k or 16M */
@@ -126,6 +185,7 @@ void kvmppc_map_vrma(struct kvm_vcpu *vcpu, struct kvm_memory_slot *memslot,
 	unsigned long psize;
 	unsigned long hp0, hp1;
 	long ret;
+	struct kvm *kvm = vcpu->kvm;
 
 	psize = 1ul << porder;
 	npages = memslot->npages >> (porder - PAGE_SHIFT);
@@ -134,8 +194,8 @@ void kvmppc_map_vrma(struct kvm_vcpu *vcpu, struct kvm_memory_slot *memslot,
 	if (npages > 1ul << (40 - porder))
 		npages = 1ul << (40 - porder);
 	/* Can't use more than 1 HPTE per HPTEG */
-	if (npages > HPT_NPTEG)
-		npages = HPT_NPTEG;
+	if (npages > kvm->arch.hpt_mask + 1)
+		npages = kvm->arch.hpt_mask + 1;
 
 	hp0 = HPTE_V_1TB_SEG | (VRMA_VSID << (40 - 16)) |
 		HPTE_V_BOLTED | hpte0_pgsize_encoding(psize);
@@ -145,7 +205,7 @@ void kvmppc_map_vrma(struct kvm_vcpu *vcpu, struct kvm_memory_slot *memslot,
 	for (i = 0; i < npages; ++i) {
 		addr = i << porder;
 		/* can't use hpt_hash since va > 64 bits */
-		hash = (i ^ (VRMA_VSID ^ (VRMA_VSID << 25))) & HPT_HASH_MASK;
+		hash = (i ^ (VRMA_VSID ^ (VRMA_VSID << 25))) & kvm->arch.hpt_mask;
 		/*
 		 * We assume that the hash table is empty and no
 		 * vcpus are using it at this stage.  Since we create
@@ -171,8 +231,7 @@ int kvmppc_mmu_hv_init(void)
 	if (!cpu_has_feature(CPU_FTR_HVMODE))
 		return -EINVAL;
 
-	memset(lpid_inuse, 0, sizeof(lpid_inuse));
-
+	/* POWER7 has 10-bit LPIDs, PPC970 and e500mc have 6-bit LPIDs */
 	if (cpu_has_feature(CPU_FTR_ARCH_206)) {
 		host_lpid = mfspr(SPRN_LPID);	/* POWER7 */
 		rsvd_lpid = LPID_RSVD;
@@ -181,9 +240,11 @@ int kvmppc_mmu_hv_init(void)
 		rsvd_lpid = MAX_LPID_970;
 	}
 
-	set_bit(host_lpid, lpid_inuse);
+	kvmppc_init_lpid(rsvd_lpid + 1);
+
+	kvmppc_claim_lpid(host_lpid);
 	/* rsvd_lpid is reserved for use in partition switching */
-	set_bit(rsvd_lpid, lpid_inuse);
+	kvmppc_claim_lpid(rsvd_lpid);
 
 	return 0;
 }
@@ -258,6 +319,8 @@ static long kvmppc_get_guest_page(struct kvm *kvm, unsigned long gfn,
 			    !(memslot->userspace_addr & (s - 1))) {
 				start &= ~(s - 1);
 				pgsize = s;
+				get_page(hpage);
+				put_page(page);
 				page = hpage;
 			}
 		}
@@ -281,11 +344,8 @@ static long kvmppc_get_guest_page(struct kvm *kvm, unsigned long gfn,
 	err = 0;
 
  out:
-	if (got) {
-		if (PageHuge(page))
-			page = compound_head(page);
+	if (got)
 		put_page(page);
-	}
 	return err;
 
  up_err:
@@ -453,7 +513,7 @@ static int instruction_is_store(unsigned int instr)
 }
 
 static int kvmppc_hv_emulate_mmio(struct kvm_run *run, struct kvm_vcpu *vcpu,
-				  unsigned long gpa, int is_store)
+				  unsigned long gpa, gva_t ea, int is_store)
 {
 	int ret;
 	u32 last_inst;
@@ -500,6 +560,7 @@ static int kvmppc_hv_emulate_mmio(struct kvm_run *run, struct kvm_vcpu *vcpu,
 	 */
 
 	vcpu->arch.paddr_accessed = gpa;
+	vcpu->arch.vaddr_accessed = ea;
 	return kvmppc_emulate_mmio(run, vcpu);
 }
 
@@ -553,7 +614,7 @@ int kvmppc_book3s_hv_page_fault(struct kvm_run *run, struct kvm_vcpu *vcpu,
 	/* No memslot means it's an emulated MMIO region */
 	if (!memslot || (memslot->flags & KVM_MEMSLOT_INVALID)) {
 		unsigned long gpa = (gfn << PAGE_SHIFT) | (ea & (psize - 1));
-		return kvmppc_hv_emulate_mmio(run, vcpu, gpa,
+		return kvmppc_hv_emulate_mmio(run, vcpu, gpa, ea,
 					      dsisr & DSISR_ISSTORE);
 	}
 
@@ -644,7 +705,7 @@ int kvmppc_book3s_hv_page_fault(struct kvm_run *run, struct kvm_vcpu *vcpu,
 		goto out_unlock;
 	hpte[0] = (hpte[0] & ~HPTE_V_ABSENT) | HPTE_V_VALID;
 
-	rmap = &memslot->rmap[gfn - memslot->base_gfn];
+	rmap = &memslot->arch.rmap[gfn - memslot->base_gfn];
 	lock_rmap(rmap);
 
 	/* Check if we might have been invalidated; let the guest retry if so */
@@ -678,8 +739,15 @@ int kvmppc_book3s_hv_page_fault(struct kvm_run *run, struct kvm_vcpu *vcpu,
 		SetPageDirty(page);
 
  out_put:
-	if (page)
-		put_page(page);
+	if (page) {
+		/*
+		 * We drop pages[0] here, not page because page might
+		 * have been set to the head page of a compound, but
+		 * we have to drop the reference on the correct tail
+		 * page to match the get inside gup()
+		 */
+		put_page(pages[0]);
+	}
 	return ret;
 
  out_unlock:
@@ -688,9 +756,12 @@ int kvmppc_book3s_hv_page_fault(struct kvm_run *run, struct kvm_vcpu *vcpu,
 	goto out_put;
 }
 
-static int kvm_handle_hva(struct kvm *kvm, unsigned long hva,
-			  int (*handler)(struct kvm *kvm, unsigned long *rmapp,
-					 unsigned long gfn))
+static int kvm_handle_hva_range(struct kvm *kvm,
+				unsigned long start,
+				unsigned long end,
+				int (*handler)(struct kvm *kvm,
+					       unsigned long *rmapp,
+					       unsigned long gfn))
 {
 	int ret;
 	int retval = 0;
@@ -699,20 +770,37 @@ static int kvm_handle_hva(struct kvm *kvm, unsigned long hva,
 
 	slots = kvm_memslots(kvm);
 	kvm_for_each_memslot(memslot, slots) {
-		unsigned long start = memslot->userspace_addr;
-		unsigned long end;
+		unsigned long hva_start, hva_end;
+		gfn_t gfn, gfn_end;
 
-		end = start + (memslot->npages << PAGE_SHIFT);
-		if (hva >= start && hva < end) {
-			gfn_t gfn_offset = (hva - start) >> PAGE_SHIFT;
+		hva_start = max(start, memslot->userspace_addr);
+		hva_end = min(end, memslot->userspace_addr +
+					(memslot->npages << PAGE_SHIFT));
+		if (hva_start >= hva_end)
+			continue;
+		/*
+		 * {gfn(page) | page intersects with [hva_start, hva_end)} =
+		 * {gfn, gfn+1, ..., gfn_end-1}.
+		 */
+		gfn = hva_to_gfn_memslot(hva_start, memslot);
+		gfn_end = hva_to_gfn_memslot(hva_end + PAGE_SIZE - 1, memslot);
 
-			ret = handler(kvm, &memslot->rmap[gfn_offset],
-				      memslot->base_gfn + gfn_offset);
+		for (; gfn < gfn_end; ++gfn) {
+			gfn_t gfn_offset = gfn - memslot->base_gfn;
+
+			ret = handler(kvm, &memslot->arch.rmap[gfn_offset], gfn);
 			retval |= ret;
 		}
 	}
 
 	return retval;
+}
+
+static int kvm_handle_hva(struct kvm *kvm, unsigned long hva,
+			  int (*handler)(struct kvm *kvm, unsigned long *rmapp,
+					 unsigned long gfn))
+{
+	return kvm_handle_hva_range(kvm, hva, hva + 1, handler);
 }
 
 static int kvm_unmap_rmapp(struct kvm *kvm, unsigned long *rmapp,
@@ -779,6 +867,13 @@ int kvm_unmap_hva(struct kvm *kvm, unsigned long hva)
 {
 	if (kvm->arch.using_mmu_notifiers)
 		kvm_handle_hva(kvm, hva, kvm_unmap_rmapp);
+	return 0;
+}
+
+int kvm_unmap_hva_range(struct kvm *kvm, unsigned long start, unsigned long end)
+{
+	if (kvm->arch.using_mmu_notifiers)
+		kvm_handle_hva_range(kvm, start, end, kvm_unmap_rmapp);
 	return 0;
 }
 
@@ -941,7 +1036,7 @@ long kvmppc_hv_get_dirty_log(struct kvm *kvm, struct kvm_memory_slot *memslot)
 	unsigned long *rmapp, *map;
 
 	preempt_disable();
-	rmapp = memslot->rmap;
+	rmapp = memslot->arch.rmap;
 	map = memslot->dirty_bitmap;
 	for (i = 0; i < memslot->npages; ++i) {
 		if (kvm_test_clear_dirty(kvm, rmapp))
@@ -979,6 +1074,7 @@ void *kvmppc_pin_guest_page(struct kvm *kvm, unsigned long gpa,
 			pa = *physp;
 		}
 		page = pfn_to_page(pa >> PAGE_SHIFT);
+		get_page(page);
 	} else {
 		hva = gfn_to_hva_memslot(memslot, gfn);
 		npages = get_user_pages_fast(hva, 1, 1, pages);
@@ -991,8 +1087,6 @@ void *kvmppc_pin_guest_page(struct kvm *kvm, unsigned long gpa,
 		page = compound_head(page);
 		psize <<= compound_order(page);
 	}
-	if (!kvm->arch.using_mmu_notifiers)
-		get_page(page);
 	offset = gpa & (psize - 1);
 	if (nb_ret)
 		*nb_ret = psize - offset;
@@ -1003,7 +1097,6 @@ void kvmppc_unpin_guest_page(struct kvm *kvm, void *va)
 {
 	struct page *page = virt_to_page(va);
 
-	page = compound_head(page);
 	put_page(page);
 }
 

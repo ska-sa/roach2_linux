@@ -30,7 +30,7 @@
 extern int init_atu;
 
 static int __init
-iq81340sc_atux_map_irq(struct pci_dev *dev, u8 idsel, u8 pin)
+iq81340sc_atux_map_irq(const struct pci_dev *dev, u8 idsel, u8 pin)
 {
 	WARN_ON(idsel < 1 || idsel > 2);
 
@@ -56,7 +56,6 @@ iq81340sc_atux_map_irq(struct pci_dev *dev, u8 idsel, u8 pin)
 }
 
 static struct hw_pci iq81340sc_pci __initdata = {
-	.swizzle	= pci_std_swizzle,
 	.nr_controllers = 0,
 	.setup		= iop13xx_pci_setup,
 	.scan		= iop13xx_scan_bus,

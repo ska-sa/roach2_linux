@@ -34,8 +34,7 @@ struct key_user root_key_user = {
 	.lock		= __SPIN_LOCK_UNLOCKED(root_key_user.lock),
 	.nkeys		= ATOMIC_INIT(2),
 	.nikeys		= ATOMIC_INIT(2),
-	.uid		= 0,
-	.user_ns	= &init_user_ns,
+	.uid		= GLOBAL_ROOT_UID,
 };
 
 /*
@@ -48,11 +47,13 @@ int install_user_keyrings(void)
 	struct key *uid_keyring, *session_keyring;
 	char buf[20];
 	int ret;
+	uid_t uid;
 
 	cred = current_cred();
 	user = cred->user;
+	uid = from_kuid(cred->user_ns, user->uid);
 
-	kenter("%p{%u}", user, user->uid);
+	kenter("%p{%u}", user, uid);
 
 	if (user->uid_keyring) {
 		kleave(" = 0 [exist]");
@@ -67,11 +68,11 @@ int install_user_keyrings(void)
 		 * - there may be one in existence already as it may have been
 		 *   pinned by a session, but the user_struct pointing to it
 		 *   may have been destroyed by setuid */
-		sprintf(buf, "_uid.%u", user->uid);
+		sprintf(buf, "_uid.%u", uid);
 
 		uid_keyring = find_keyring_by_name(buf, true);
 		if (IS_ERR(uid_keyring)) {
-			uid_keyring = keyring_alloc(buf, user->uid, (gid_t) -1,
+			uid_keyring = keyring_alloc(buf, user->uid, INVALID_GID,
 						    cred, KEY_ALLOC_IN_QUOTA,
 						    NULL);
 			if (IS_ERR(uid_keyring)) {
@@ -82,12 +83,12 @@ int install_user_keyrings(void)
 
 		/* get a default session keyring (which might also exist
 		 * already) */
-		sprintf(buf, "_uid_ses.%u", user->uid);
+		sprintf(buf, "_uid_ses.%u", uid);
 
 		session_keyring = find_keyring_by_name(buf, true);
 		if (IS_ERR(session_keyring)) {
 			session_keyring =
-				keyring_alloc(buf, user->uid, (gid_t) -1,
+				keyring_alloc(buf, user->uid, INVALID_GID,
 					      cred, KEY_ALLOC_IN_QUOTA, NULL);
 			if (IS_ERR(session_keyring)) {
 				ret = PTR_ERR(session_keyring);
@@ -732,6 +733,8 @@ try_again:
 	if (ret < 0)
 		goto invalid_key;
 
+	key->last_used_at = current_kernel_time().tv_sec;
+
 error:
 	put_cred(cred);
 	return key_ref;
@@ -832,23 +835,16 @@ error:
  * Replace a process's session keyring on behalf of one of its children when
  * the target  process is about to resume userspace execution.
  */
-void key_replace_session_keyring(void)
+void key_change_session_keyring(struct callback_head *twork)
 {
-	const struct cred *old;
-	struct cred *new;
+	const struct cred *old = current_cred();
+	struct cred *new = container_of(twork, struct cred, rcu);
 
-	if (!current->replacement_session_keyring)
+	if (unlikely(current->flags & PF_EXITING)) {
+		put_cred(new);
 		return;
+	}
 
-	write_lock_irq(&tasklist_lock);
-	new = current->replacement_session_keyring;
-	current->replacement_session_keyring = NULL;
-	write_unlock_irq(&tasklist_lock);
-
-	if (!new)
-		return;
-
-	old = current_cred();
 	new->  uid	= old->  uid;
 	new-> euid	= old-> euid;
 	new-> suid	= old-> suid;
@@ -858,7 +854,7 @@ void key_replace_session_keyring(void)
 	new-> sgid	= old-> sgid;
 	new->fsgid	= old->fsgid;
 	new->user	= get_uid(old->user);
-	new->user_ns	= new->user->user_ns;
+	new->user_ns	= get_user_ns(new->user_ns);
 	new->group_info	= get_group_info(old->group_info);
 
 	new->securebits	= old->securebits;

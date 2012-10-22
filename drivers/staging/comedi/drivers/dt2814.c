@@ -45,6 +45,8 @@ addition, the clock does not seem to be very accurate.
 #include <linux/ioport.h>
 #include <linux/delay.h>
 
+#include "comedi_fc.h"
+
 #define DT2814_SIZE 2
 
 #define DT2814_CSR 0
@@ -59,31 +61,6 @@ addition, the clock does not seem to be very accurate.
 #define DT2814_BUSY 0x20
 #define DT2814_ENB 0x10
 #define DT2814_CHANMASK 0x0f
-
-static int dt2814_attach(struct comedi_device *dev,
-			 struct comedi_devconfig *it);
-static int dt2814_detach(struct comedi_device *dev);
-static struct comedi_driver driver_dt2814 = {
-	.driver_name = "dt2814",
-	.module = THIS_MODULE,
-	.attach = dt2814_attach,
-	.detach = dt2814_detach,
-};
-
-static int __init driver_dt2814_init_module(void)
-{
-	return comedi_driver_register(&driver_dt2814);
-}
-
-static void __exit driver_dt2814_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_dt2814);
-}
-
-module_init(driver_dt2814_init_module);
-module_exit(driver_dt2814_cleanup_module);
-
-static irqreturn_t dt2814_interrupt(int irq, void *dev);
 
 struct dt2814_private {
 
@@ -154,42 +131,22 @@ static int dt2814_ai_cmdtest(struct comedi_device *dev,
 	int err = 0;
 	int tmp;
 
-	/* step 1: make sure trigger sources are trivially valid */
+	/* Step 1 : check if triggers are trivially valid */
 
-	tmp = cmd->start_src;
-	cmd->start_src &= TRIG_NOW;
-	if (!cmd->start_src || tmp != cmd->start_src)
-		err++;
-
-	tmp = cmd->scan_begin_src;
-	cmd->scan_begin_src &= TRIG_TIMER;
-	if (!cmd->scan_begin_src || tmp != cmd->scan_begin_src)
-		err++;
-
-	tmp = cmd->convert_src;
-	cmd->convert_src &= TRIG_NOW;
-	if (!cmd->convert_src || tmp != cmd->convert_src)
-		err++;
-
-	tmp = cmd->scan_end_src;
-	cmd->scan_end_src &= TRIG_COUNT;
-	if (!cmd->scan_end_src || tmp != cmd->scan_end_src)
-		err++;
-
-	tmp = cmd->stop_src;
-	cmd->stop_src &= TRIG_COUNT | TRIG_NONE;
-	if (!cmd->stop_src || tmp != cmd->stop_src)
-		err++;
+	err |= cfc_check_trigger_src(&cmd->start_src, TRIG_NOW);
+	err |= cfc_check_trigger_src(&cmd->scan_begin_src, TRIG_TIMER);
+	err |= cfc_check_trigger_src(&cmd->convert_src, TRIG_NOW);
+	err |= cfc_check_trigger_src(&cmd->scan_end_src, TRIG_COUNT);
+	err |= cfc_check_trigger_src(&cmd->stop_src, TRIG_COUNT | TRIG_NONE);
 
 	if (err)
 		return 1;
 
-	/* step 2: make sure trigger sources are
-	 * unique and mutually compatible */
+	/* Step 2a : make sure trigger sources are unique */
 
-	/* note that mutual compatibility is not an issue here */
-	if (cmd->stop_src != TRIG_TIMER && cmd->stop_src != TRIG_EXT)
-		err++;
+	err |= cfc_check_trigger_is_unique(cmd->stop_src);
+
+	/* Step 2b : and mutually compatible */
 
 	if (err)
 		return 2;
@@ -260,6 +217,45 @@ static int dt2814_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 
 }
 
+static irqreturn_t dt2814_interrupt(int irq, void *d)
+{
+	int lo, hi;
+	struct comedi_device *dev = d;
+	struct comedi_subdevice *s;
+	int data;
+
+	if (!dev->attached) {
+		comedi_error(dev, "spurious interrupt");
+		return IRQ_HANDLED;
+	}
+
+	s = &dev->subdevices[0];
+
+	hi = inb(dev->iobase + DT2814_DATA);
+	lo = inb(dev->iobase + DT2814_DATA);
+
+	data = (hi << 4) | (lo >> 4);
+
+	if (!(--devpriv->ntrig)) {
+		int i;
+
+		outb(0, dev->iobase + DT2814_CSR);
+		/* note: turning off timed mode triggers another
+		   sample. */
+
+		for (i = 0; i < DT2814_TIMEOUT; i++) {
+			if (inb(dev->iobase + DT2814_CSR) & DT2814_FINISH)
+				break;
+		}
+		inb(dev->iobase + DT2814_DATA);
+		inb(dev->iobase + DT2814_DATA);
+
+		s->async->events |= COMEDI_CB_EOA;
+	}
+	comedi_event(dev, s);
+	return IRQ_HANDLED;
+}
+
 static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 {
 	int i, irq;
@@ -324,15 +320,15 @@ static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 #endif
 	}
 
-	ret = alloc_subdevices(dev, 1);
-	if (ret < 0)
+	ret = comedi_alloc_subdevices(dev, 1);
+	if (ret)
 		return ret;
 
 	ret = alloc_private(dev, sizeof(struct dt2814_private));
 	if (ret < 0)
 		return ret;
 
-	s = dev->subdevices + 0;
+	s = &dev->subdevices[0];
 	dev->read_subdev = s;
 	s->type = COMEDI_SUBD_AI;
 	s->subdev_flags = SDF_READABLE | SDF_GROUND | SDF_CMD_READ;
@@ -347,57 +343,21 @@ static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	return 0;
 }
 
-static int dt2814_detach(struct comedi_device *dev)
+static void dt2814_detach(struct comedi_device *dev)
 {
-	printk(KERN_INFO "comedi%d: dt2814: remove\n", dev->minor);
-
 	if (dev->irq)
 		free_irq(dev->irq, dev);
-
 	if (dev->iobase)
 		release_region(dev->iobase, DT2814_SIZE);
-
-	return 0;
 }
 
-static irqreturn_t dt2814_interrupt(int irq, void *d)
-{
-	int lo, hi;
-	struct comedi_device *dev = d;
-	struct comedi_subdevice *s;
-	int data;
-
-	if (!dev->attached) {
-		comedi_error(dev, "spurious interrupt");
-		return IRQ_HANDLED;
-	}
-
-	s = dev->subdevices + 0;
-
-	hi = inb(dev->iobase + DT2814_DATA);
-	lo = inb(dev->iobase + DT2814_DATA);
-
-	data = (hi << 4) | (lo >> 4);
-
-	if (!(--devpriv->ntrig)) {
-		int i;
-
-		outb(0, dev->iobase + DT2814_CSR);
-		/* note: turning off timed mode triggers another
-		   sample. */
-
-		for (i = 0; i < DT2814_TIMEOUT; i++) {
-			if (inb(dev->iobase + DT2814_CSR) & DT2814_FINISH)
-				break;
-		}
-		inb(dev->iobase + DT2814_DATA);
-		inb(dev->iobase + DT2814_DATA);
-
-		s->async->events |= COMEDI_CB_EOA;
-	}
-	comedi_event(dev, s);
-	return IRQ_HANDLED;
-}
+static struct comedi_driver dt2814_driver = {
+	.driver_name	= "dt2814",
+	.module		= THIS_MODULE,
+	.attach		= dt2814_attach,
+	.detach		= dt2814_detach,
+};
+module_comedi_driver(dt2814_driver);
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");

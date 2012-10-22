@@ -371,8 +371,7 @@ static int wm8940_i2s_hw_params(struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params,
 				struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_codec *codec = dai->codec;
 	u16 iface = snd_soc_read(codec, WM8940_IFACE) & 0xFD9F;
 	u16 addcntrl = snd_soc_read(codec, WM8940_ADDCNTRL) & 0xFFF1;
 	u16 companding =  snd_soc_read(codec,
@@ -786,23 +785,7 @@ static struct i2c_driver wm8940_i2c_driver = {
 	.id_table = wm8940_i2c_id,
 };
 
-static int __init wm8940_modinit(void)
-{
-	int ret = 0;
-	ret = i2c_add_driver(&wm8940_i2c_driver);
-	if (ret != 0) {
-		printk(KERN_ERR "Failed to register wm8940 I2C driver: %d\n",
-		       ret);
-	}
-	return ret;
-}
-module_init(wm8940_modinit);
-
-static void __exit wm8940_exit(void)
-{
-	i2c_del_driver(&wm8940_i2c_driver);
-}
-module_exit(wm8940_exit);
+module_i2c_driver(wm8940_i2c_driver);
 
 MODULE_DESCRIPTION("ASoC WM8940 driver");
 MODULE_AUTHOR("Jonathan Cameron");

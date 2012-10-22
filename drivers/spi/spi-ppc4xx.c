@@ -30,7 +30,6 @@
 #include <linux/errno.h>
 #include <linux/wait.h>
 #include <linux/of_platform.h>
-#include <linux/of_spi.h>
 #include <linux/of_gpio.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
@@ -102,7 +101,7 @@ struct spi_ppc4xx_regs {
 	u8 dummy;
 	/*
 	 * Clock divisor modulus register
-	 * This uses the follwing formula:
+	 * This uses the following formula:
 	 *    SCPClkOut = OPBCLK/(4(CDM + 1))
 	 * or
 	 *    CDM = (OPBCLK/4*SCPClkOut) - 1
@@ -202,7 +201,7 @@ static int spi_ppc4xx_setupxfer(struct spi_device *spi, struct spi_transfer *t)
 		return -EINVAL;
 	}
 
-	/* Write new configration */
+	/* Write new configuration */
 	out_8(&hw->regs->mode, cs->mode);
 
 	/* Set the clock */
@@ -466,9 +465,6 @@ static int __init spi_ppc4xx_of_probe(struct platform_device *op)
 	bbp->use_dma = 0;
 	bbp->master->setup = spi_ppc4xx_setup;
 	bbp->master->cleanup = spi_ppc4xx_cleanup;
-
-	/* Allocate bus num dynamically. */
-	bbp->master->bus_num = -1;
 
 	/* the spi->mode bits understood by this driver: */
 	bbp->master->mode_bits =

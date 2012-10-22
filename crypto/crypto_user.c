@@ -30,7 +30,7 @@
 
 #include "internal.h"
 
-DEFINE_MUTEX(crypto_cfg_mutex);
+static DEFINE_MUTEX(crypto_cfg_mutex);
 
 /* The crypto netlink socket */
 static struct sock *crypto_nlsk;
@@ -81,9 +81,9 @@ static int crypto_report_cipher(struct sk_buff *skb, struct crypto_alg *alg)
 	rcipher.min_keysize = alg->cra_cipher.cia_min_keysize;
 	rcipher.max_keysize = alg->cra_cipher.cia_max_keysize;
 
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_CIPHER,
-		sizeof(struct crypto_report_cipher), &rcipher);
-
+	if (nla_put(skb, CRYPTOCFGA_REPORT_CIPHER,
+		    sizeof(struct crypto_report_cipher), &rcipher))
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:
@@ -96,9 +96,9 @@ static int crypto_report_comp(struct sk_buff *skb, struct crypto_alg *alg)
 
 	snprintf(rcomp.type, CRYPTO_MAX_ALG_NAME, "%s", "compression");
 
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_COMPRESS,
-		sizeof(struct crypto_report_comp), &rcomp);
-
+	if (nla_put(skb, CRYPTOCFGA_REPORT_COMPRESS,
+		    sizeof(struct crypto_report_comp), &rcomp))
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:
@@ -117,16 +117,16 @@ static int crypto_report_one(struct crypto_alg *alg,
 	ualg->cru_flags = alg->cra_flags;
 	ualg->cru_refcnt = atomic_read(&alg->cra_refcnt);
 
-	NLA_PUT_U32(skb, CRYPTOCFGA_PRIORITY_VAL, alg->cra_priority);
-
+	if (nla_put_u32(skb, CRYPTOCFGA_PRIORITY_VAL, alg->cra_priority))
+		goto nla_put_failure;
 	if (alg->cra_flags & CRYPTO_ALG_LARVAL) {
 		struct crypto_report_larval rl;
 
 		snprintf(rl.type, CRYPTO_MAX_ALG_NAME, "%s", "larval");
 
-		NLA_PUT(skb, CRYPTOCFGA_REPORT_LARVAL,
-			sizeof(struct crypto_report_larval), &rl);
-
+		if (nla_put(skb, CRYPTOCFGA_REPORT_LARVAL,
+			    sizeof(struct crypto_report_larval), &rl))
+			goto nla_put_failure;
 		goto out;
 	}
 
@@ -166,7 +166,7 @@ static int crypto_report_alg(struct crypto_alg *alg,
 	struct crypto_user_alg *ualg;
 	int err = 0;
 
-	nlh = nlmsg_put(skb, NETLINK_CB(in_skb).pid, info->nlmsg_seq,
+	nlh = nlmsg_put(skb, NETLINK_CB(in_skb).portid, info->nlmsg_seq,
 			CRYPTO_MSG_GETALG, sizeof(*ualg), info->nlmsg_flags);
 	if (!nlh) {
 		err = -EMSGSIZE;
@@ -216,7 +216,7 @@ static int crypto_report(struct sk_buff *in_skb, struct nlmsghdr *in_nlh,
 	if (err)
 		return err;
 
-	return nlmsg_unicast(crypto_nlsk, skb, NETLINK_CB(in_skb).pid);
+	return nlmsg_unicast(crypto_nlsk, skb, NETLINK_CB(in_skb).portid);
 }
 
 static int crypto_dump_report(struct sk_buff *skb, struct netlink_callback *cb)
@@ -496,9 +496,11 @@ static void crypto_netlink_rcv(struct sk_buff *skb)
 
 static int __init crypto_user_init(void)
 {
-	crypto_nlsk = netlink_kernel_create(&init_net, NETLINK_CRYPTO,
-					    0, crypto_netlink_rcv,
-					    NULL, THIS_MODULE);
+	struct netlink_kernel_cfg cfg = {
+		.input	= crypto_netlink_rcv,
+	};
+
+	crypto_nlsk = netlink_kernel_create(&init_net, NETLINK_CRYPTO, &cfg);
 	if (!crypto_nlsk)
 		return -ENOMEM;
 

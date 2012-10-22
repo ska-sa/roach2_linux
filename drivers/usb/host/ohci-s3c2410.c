@@ -21,7 +21,7 @@
 
 #include <linux/platform_device.h>
 #include <linux/clk.h>
-#include <plat/usb-control.h>
+#include <linux/platform_data/usb-ohci-s3c2410.h>
 
 #define valid_port(idx) ((idx) == 1 || (idx) == 2)
 
@@ -420,7 +420,8 @@ ohci_s3c2410_start(struct usb_hcd *hcd)
 
 	ret = ohci_run(ohci);
 	if (ret < 0) {
-		err("can't start %s", hcd->self.bus_name);
+		dev_err(hcd->self.controller, "can't start %s\n",
+			hcd->self.bus_name);
 		ohci_stop(hcd);
 		return ret;
 	}

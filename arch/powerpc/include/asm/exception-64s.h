@@ -288,19 +288,12 @@ label##_hv:								\
 /* Exception addition: Hard disable interrupts */
 #define DISABLE_INTS	SOFT_DISABLE_INTS(r10,r11)
 
-/* Exception addition: Keep interrupt state */
-#define ENABLE_INTS				\
-	ld	r11,PACAKMSR(r13);		\
-	ld	r12,_MSR(r1);			\
-	rlwimi	r11,r12,0,MSR_EE;		\
-	mtmsrd	r11,1
-
 #define ADD_NVGPRS				\
 	bl	.save_nvgprs
 
 #define RUNLATCH_ON				\
 BEGIN_FTR_SECTION				\
-	clrrdi	r3,r1,THREAD_SHIFT;		\
+	CURRENT_THREAD_INFO(r3, r1);		\
 	ld	r4,TI_LOCAL_FLAGS(r3);		\
 	andi.	r0,r4,_TLF_RUNLATCH;		\
 	beql	ppc64_runlatch_on_trampoline;	\
@@ -339,7 +332,7 @@ label##_common:							\
 #ifdef CONFIG_PPC_970_NAP
 #define FINISH_NAP				\
 BEGIN_FTR_SECTION				\
-	clrrdi	r11,r1,THREAD_SHIFT;		\
+	CURRENT_THREAD_INFO(r11, r1);		\
 	ld	r9,TI_LOCAL_FLAGS(r11);		\
 	andi.	r10,r9,_TLF_NAPPING;		\
 	bnel	power4_fixup_nap;		\

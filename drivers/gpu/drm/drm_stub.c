@@ -34,8 +34,8 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
-#include "drmP.h"
-#include "drm_core.h"
+#include <drm/drmP.h>
+#include <drm/drm_core.h>
 
 unsigned int drm_debug = 0;	/* 1 to enable debug output */
 EXPORT_SYMBOL(drm_debug);
@@ -122,11 +122,10 @@ again:
 	ret = idr_get_new_above(&drm_minors_idr, NULL,
 				base, &new_id);
 	mutex_unlock(&dev->struct_mutex);
-	if (ret == -EAGAIN) {
+	if (ret == -EAGAIN)
 		goto again;
-	} else if (ret) {
+	else if (ret)
 		return ret;
-	}
 
 	if (new_id >= limit) {
 		idr_remove(&drm_minors_idr, new_id);
@@ -211,7 +210,7 @@ EXPORT_SYMBOL(drm_master_put);
 int drm_setmaster_ioctl(struct drm_device *dev, void *data,
 			struct drm_file *file_priv)
 {
-	int ret = 0;
+	int ret;
 
 	if (file_priv->is_master)
 		return 0;

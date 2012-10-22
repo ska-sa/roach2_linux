@@ -74,6 +74,12 @@ struct btrfs_ordered_sum {
 
 #define BTRFS_ORDERED_DIRECT 5 /* set when we're doing DIO with this extent */
 
+#define BTRFS_ORDERED_IOERR 6 /* We had an io error when writing this out */
+
+#define BTRFS_ORDERED_UPDATED_ISIZE 7 /* indicates wether this ordered extent
+				       * has done its due diligence in updating
+				       * the isize. */
+
 struct btrfs_ordered_extent {
 	/* logical offset in the file */
 	u64 file_offset;
@@ -89,6 +95,13 @@ struct btrfs_ordered_extent {
 
 	/* number of bytes that still need writing */
 	u64 bytes_left;
+
+	/*
+	 * the end of the ordered extent which is behind it but
+	 * didn't update disk_i_size. Please see the comment of
+	 * btrfs_ordered_update_i_size();
+	 */
+	u64 outstanding_isize;
 
 	/* flags (described above) */
 	unsigned long flags;
@@ -113,6 +126,8 @@ struct btrfs_ordered_extent {
 
 	/* a per root list of all the pending ordered extents */
 	struct list_head root_extent_list;
+
+	struct btrfs_work work;
 };
 
 
@@ -143,10 +158,11 @@ void btrfs_remove_ordered_extent(struct inode *inode,
 				struct btrfs_ordered_extent *entry);
 int btrfs_dec_test_ordered_pending(struct inode *inode,
 				   struct btrfs_ordered_extent **cached,
-				   u64 file_offset, u64 io_size);
+				   u64 file_offset, u64 io_size, int uptodate);
 int btrfs_dec_test_first_ordered_pending(struct inode *inode,
 				   struct btrfs_ordered_extent **cached,
-				   u64 *file_offset, u64 io_size);
+				   u64 *file_offset, u64 io_size,
+				   int uptodate);
 int btrfs_add_ordered_extent(struct inode *inode, u64 file_offset,
 			     u64 start, u64 len, u64 disk_len, int type);
 int btrfs_add_ordered_extent_dio(struct inode *inode, u64 file_offset,
@@ -174,6 +190,7 @@ void btrfs_run_ordered_operations(struct btrfs_root *root, int wait);
 void btrfs_add_ordered_operation(struct btrfs_trans_handle *trans,
 				 struct btrfs_root *root,
 				 struct inode *inode);
-void btrfs_wait_ordered_extents(struct btrfs_root *root,
-				int nocow_only, int delay_iput);
+void btrfs_wait_ordered_extents(struct btrfs_root *root, int delay_iput);
+int __init ordered_data_init(void);
+void ordered_data_exit(void);
 #endif

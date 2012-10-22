@@ -16,8 +16,6 @@
 
 #include <video/exynos_dp.h>
 
-#include <plat/cpu.h>
-
 #include "exynos_dp_core.h"
 #include "exynos_dp_reg.h"
 
@@ -65,6 +63,28 @@ void exynos_dp_lane_swap(struct exynos_dp_device *dp, bool enable)
 	writel(reg, dp->reg_base + EXYNOS_DP_LANE_MAP);
 }
 
+void exynos_dp_init_analog_param(struct exynos_dp_device *dp)
+{
+	u32 reg;
+
+	reg = TX_TERMINAL_CTRL_50_OHM;
+	writel(reg, dp->reg_base + EXYNOS_DP_ANALOG_CTL_1);
+
+	reg = SEL_24M | TX_DVDD_BIT_1_0625V;
+	writel(reg, dp->reg_base + EXYNOS_DP_ANALOG_CTL_2);
+
+	reg = DRIVE_DVDD_BIT_1_0625V | VCO_BIT_600_MICRO;
+	writel(reg, dp->reg_base + EXYNOS_DP_ANALOG_CTL_3);
+
+	reg = PD_RING_OSC | AUX_TERMINAL_CTRL_50_OHM |
+		TX_CUR1_2X | TX_CUR_16_MA;
+	writel(reg, dp->reg_base + EXYNOS_DP_PLL_FILTER_CTL_1);
+
+	reg = CH3_AMP_400_MV | CH2_AMP_400_MV |
+		CH1_AMP_400_MV | CH0_AMP_400_MV;
+	writel(reg, dp->reg_base + EXYNOS_DP_TX_AMP_TUNING_CTL);
+}
+
 void exynos_dp_init_interrupt(struct exynos_dp_device *dp)
 {
 	/* Set interrupt pin assertion polarity as high */
@@ -89,8 +109,6 @@ void exynos_dp_reset(struct exynos_dp_device *dp)
 {
 	u32 reg;
 
-	writel(RESET_DP_TX, dp->reg_base + EXYNOS_DP_TX_SW_RESET);
-
 	exynos_dp_stop_video(dp);
 	exynos_dp_enable_video_mute(dp, 0);
 
@@ -104,7 +122,7 @@ void exynos_dp_reset(struct exynos_dp_device *dp)
 		LS_CLK_DOMAIN_FUNC_EN_N;
 	writel(reg, dp->reg_base + EXYNOS_DP_FUNC_EN_2);
 
-	udelay(20);
+	usleep_range(20, 30);
 
 	exynos_dp_lane_swap(dp, 0);
 
@@ -130,8 +148,11 @@ void exynos_dp_reset(struct exynos_dp_device *dp)
 	writel(0x2, dp->reg_base + EXYNOS_DP_M_AUD_GEN_FILTER_TH);
 
 	writel(0x00000101, dp->reg_base + EXYNOS_DP_SOC_GENERAL_CTL);
+}
 
-	exynos_dp_init_interrupt(dp);
+void exynos_dp_swreset(struct exynos_dp_device *dp)
+{
+	writel(RESET_DP_TX, dp->reg_base + EXYNOS_DP_TX_SW_RESET);
 }
 
 void exynos_dp_config_interrupt(struct exynos_dp_device *dp)
@@ -155,7 +176,7 @@ void exynos_dp_config_interrupt(struct exynos_dp_device *dp)
 	writel(reg, dp->reg_base + EXYNOS_DP_INT_STA_MASK);
 }
 
-u32 exynos_dp_get_pll_lock_status(struct exynos_dp_device *dp)
+enum pll_status exynos_dp_get_pll_lock_status(struct exynos_dp_device *dp)
 {
 	u32 reg;
 
@@ -271,6 +292,7 @@ void exynos_dp_set_analog_power_down(struct exynos_dp_device *dp,
 void exynos_dp_init_analog_func(struct exynos_dp_device *dp)
 {
 	u32 reg;
+	int timeout_loop = 0;
 
 	exynos_dp_set_analog_power_down(dp, POWER_ALL, 0);
 
@@ -282,8 +304,18 @@ void exynos_dp_init_analog_func(struct exynos_dp_device *dp)
 	writel(reg, dp->reg_base + EXYNOS_DP_DEBUG_CTL);
 
 	/* Power up PLL */
-	if (exynos_dp_get_pll_lock_status(dp) == PLL_UNLOCKED)
+	if (exynos_dp_get_pll_lock_status(dp) == PLL_UNLOCKED) {
 		exynos_dp_set_pll_power_down(dp, 0);
+
+		while (exynos_dp_get_pll_lock_status(dp) == PLL_UNLOCKED) {
+			timeout_loop++;
+			if (DP_TIMEOUT_LOOP_COUNT < timeout_loop) {
+				dev_err(dp->dev, "failed to get pll lock status\n");
+				return;
+			}
+			usleep_range(10, 20);
+		}
+	}
 
 	/* Enable Serdes FIFO function and Link symbol clock domain module */
 	reg = readl(dp->reg_base + EXYNOS_DP_FUNC_EN_2);
@@ -366,6 +398,7 @@ int exynos_dp_start_aux_transaction(struct exynos_dp_device *dp)
 {
 	int reg;
 	int retval = 0;
+	int timeout_loop = 0;
 
 	/* Enable AUX CH operation */
 	reg = readl(dp->reg_base + EXYNOS_DP_AUX_CH_CTL_2);
@@ -374,8 +407,15 @@ int exynos_dp_start_aux_transaction(struct exynos_dp_device *dp)
 
 	/* Is AUX CH command reply received? */
 	reg = readl(dp->reg_base + EXYNOS_DP_INT_STA);
-	while (!(reg & RPLY_RECEIV))
+	while (!(reg & RPLY_RECEIV)) {
+		timeout_loop++;
+		if (DP_TIMEOUT_LOOP_COUNT < timeout_loop) {
+			dev_err(dp->dev, "AUX CH command reply failed!\n");
+			return -ETIMEDOUT;
+		}
 		reg = readl(dp->reg_base + EXYNOS_DP_INT_STA);
+		usleep_range(10, 11);
+	}
 
 	/* Clear interrupt source for AUX CH command reply */
 	writel(RPLY_RECEIV, dp->reg_base + EXYNOS_DP_INT_STA);
@@ -436,7 +476,8 @@ int exynos_dp_write_byte_to_dpcd(struct exynos_dp_device *dp,
 		if (retval == 0)
 			break;
 		else
-			dev_err(dp->dev, "Aux Transaction fail!\n");
+			dev_dbg(dp->dev, "%s: Aux Transaction fail!\n",
+				__func__);
 	}
 
 	return retval;
@@ -476,7 +517,8 @@ int exynos_dp_read_byte_from_dpcd(struct exynos_dp_device *dp,
 		if (retval == 0)
 			break;
 		else
-			dev_err(dp->dev, "Aux Transaction fail!\n");
+			dev_dbg(dp->dev, "%s: Aux Transaction fail!\n",
+				__func__);
 	}
 
 	/* Read data buffer */
@@ -540,7 +582,8 @@ int exynos_dp_write_bytes_to_dpcd(struct exynos_dp_device *dp,
 			if (retval == 0)
 				break;
 			else
-				dev_err(dp->dev, "Aux Transaction fail!\n");
+				dev_dbg(dp->dev, "%s: Aux Transaction fail!\n",
+					__func__);
 		}
 
 		start_offset += cur_data_count;
@@ -597,7 +640,8 @@ int exynos_dp_read_bytes_from_dpcd(struct exynos_dp_device *dp,
 			if (retval == 0)
 				break;
 			else
-				dev_err(dp->dev, "Aux Transaction fail!\n");
+				dev_dbg(dp->dev, "%s: Aux Transaction fail!\n",
+					__func__);
 		}
 
 		for (cur_data_idx = 0; cur_data_idx < cur_data_count;
@@ -642,7 +686,7 @@ int exynos_dp_select_i2c_device(struct exynos_dp_device *dp,
 	/* Start AUX transaction */
 	retval = exynos_dp_start_aux_transaction(dp);
 	if (retval != 0)
-		dev_err(dp->dev, "Aux Transaction fail!\n");
+		dev_dbg(dp->dev, "%s: Aux Transaction fail!\n", __func__);
 
 	return retval;
 }
@@ -682,7 +726,8 @@ int exynos_dp_read_byte_from_i2c(struct exynos_dp_device *dp,
 		if (retval == 0)
 			break;
 		else
-			dev_err(dp->dev, "Aux Transaction fail!\n");
+			dev_dbg(dp->dev, "%s: Aux Transaction fail!\n",
+				__func__);
 	}
 
 	/* Read data */
@@ -717,7 +762,7 @@ int exynos_dp_read_bytes_from_i2c(struct exynos_dp_device *dp,
 
 			/*
 			 * If Rx sends defer, Tx sends only reads
-			 * request without sending addres
+			 * request without sending address
 			 */
 			if (!defer)
 				retval = exynos_dp_select_i2c_device(dp,
@@ -742,7 +787,9 @@ int exynos_dp_read_bytes_from_i2c(struct exynos_dp_device *dp,
 				if (retval == 0)
 					break;
 				else
-					dev_err(dp->dev, "Aux Transaction fail!\n");
+					dev_dbg(dp->dev,
+						"%s: Aux Transaction fail!\n",
+						__func__);
 			}
 			/* Check if Rx sends defer */
 			reg = readl(dp->reg_base + EXYNOS_DP_AUX_RX_COMM);
@@ -848,7 +895,9 @@ void exynos_dp_set_lane0_pre_emphasis(struct exynos_dp_device *dp, u32 level)
 {
 	u32 reg;
 
-	reg = level << PRE_EMPHASIS_SET_SHIFT;
+	reg = readl(dp->reg_base + EXYNOS_DP_LN0_LINK_TRAINING_CTL);
+	reg &= ~PRE_EMPHASIS_SET_MASK;
+	reg |= level << PRE_EMPHASIS_SET_SHIFT;
 	writel(reg, dp->reg_base + EXYNOS_DP_LN0_LINK_TRAINING_CTL);
 }
 
@@ -856,7 +905,9 @@ void exynos_dp_set_lane1_pre_emphasis(struct exynos_dp_device *dp, u32 level)
 {
 	u32 reg;
 
-	reg = level << PRE_EMPHASIS_SET_SHIFT;
+	reg = readl(dp->reg_base + EXYNOS_DP_LN1_LINK_TRAINING_CTL);
+	reg &= ~PRE_EMPHASIS_SET_MASK;
+	reg |= level << PRE_EMPHASIS_SET_SHIFT;
 	writel(reg, dp->reg_base + EXYNOS_DP_LN1_LINK_TRAINING_CTL);
 }
 
@@ -864,7 +915,9 @@ void exynos_dp_set_lane2_pre_emphasis(struct exynos_dp_device *dp, u32 level)
 {
 	u32 reg;
 
-	reg = level << PRE_EMPHASIS_SET_SHIFT;
+	reg = readl(dp->reg_base + EXYNOS_DP_LN2_LINK_TRAINING_CTL);
+	reg &= ~PRE_EMPHASIS_SET_MASK;
+	reg |= level << PRE_EMPHASIS_SET_SHIFT;
 	writel(reg, dp->reg_base + EXYNOS_DP_LN2_LINK_TRAINING_CTL);
 }
 
@@ -872,7 +925,9 @@ void exynos_dp_set_lane3_pre_emphasis(struct exynos_dp_device *dp, u32 level)
 {
 	u32 reg;
 
-	reg = level << PRE_EMPHASIS_SET_SHIFT;
+	reg = readl(dp->reg_base + EXYNOS_DP_LN3_LINK_TRAINING_CTL);
+	reg &= ~PRE_EMPHASIS_SET_MASK;
+	reg |= level << PRE_EMPHASIS_SET_SHIFT;
 	writel(reg, dp->reg_base + EXYNOS_DP_LN3_LINK_TRAINING_CTL);
 }
 
@@ -953,13 +1008,13 @@ void exynos_dp_reset_macro(struct exynos_dp_device *dp)
 	writel(reg, dp->reg_base + EXYNOS_DP_PHY_TEST);
 
 	/* 10 us is the minimum reset time. */
-	udelay(10);
+	usleep_range(10, 20);
 
 	reg &= ~MACRO_RST;
 	writel(reg, dp->reg_base + EXYNOS_DP_PHY_TEST);
 }
 
-int exynos_dp_init_video(struct exynos_dp_device *dp)
+void exynos_dp_init_video(struct exynos_dp_device *dp)
 {
 	u32 reg;
 
@@ -977,8 +1032,6 @@ int exynos_dp_init_video(struct exynos_dp_device *dp)
 
 	reg = VID_HRES_TH(2) | VID_VRES_TH(0);
 	writel(reg, dp->reg_base + EXYNOS_DP_VIDEO_CTL_8);
-
-	return 0;
 }
 
 void exynos_dp_set_video_color_format(struct exynos_dp_device *dp,

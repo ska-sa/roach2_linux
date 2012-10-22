@@ -48,7 +48,13 @@ static ssize_t pcm_set_impulse_volume(struct device *dev,
 				      const char *buf, size_t count)
 {
 	struct snd_line6_pcm *line6pcm = dev2pcm(dev);
-	int value = simple_strtoul(buf, NULL, 10);
+	int value;
+	int rv;
+
+	rv = kstrtoint(buf, 10, &value);
+	if (rv < 0)
+		return rv;
+
 	line6pcm->impulse_volume = value;
 
 	if (value > 0)
@@ -99,7 +105,7 @@ int line6_pcm_acquire(struct snd_line6_pcm *line6pcm, int channels)
 	unsigned long flags_new = flags_old | channels;
 	unsigned long flags_final = flags_old;
 	int err = 0;
-	
+
 	line6pcm->prev_fbuf = NULL;
 
 	if (test_flags(flags_old, flags_new, LINE6_BITS_CAPTURE_BUFFER)) {

@@ -723,8 +723,7 @@ static int wm8978_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_pcm_hw_params *params,
 			    struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_codec *codec = dai->codec;
 	struct wm8978_priv *wm8978 = snd_soc_codec_get_drvdata(codec);
 	/* Word length mask = 0x60 */
 	u16 iface_ctl = snd_soc_read(codec, WM8978_AUDIO_INTERFACE) & ~0x60;
@@ -1106,23 +1105,7 @@ static struct i2c_driver wm8978_i2c_driver = {
 	.id_table = wm8978_i2c_id,
 };
 
-static int __init wm8978_modinit(void)
-{
-	int ret = 0;
-	ret = i2c_add_driver(&wm8978_i2c_driver);
-	if (ret != 0) {
-		printk(KERN_ERR "Failed to register WM8978 I2C driver: %d\n",
-		       ret);
-	}
-	return ret;
-}
-module_init(wm8978_modinit);
-
-static void __exit wm8978_exit(void)
-{
-	i2c_del_driver(&wm8978_i2c_driver);
-}
-module_exit(wm8978_exit);
+module_i2c_driver(wm8978_i2c_driver);
 
 MODULE_DESCRIPTION("ASoC WM8978 codec driver");
 MODULE_AUTHOR("Guennadi Liakhovetski <g.liakhovetski@gmx.de>");

@@ -36,8 +36,8 @@
 #include <mach/regs-gpio.h>
 #include <mach/regs-mem.h>
 #include <mach/regs-lcd.h>
-#include <plat/nand.h>
-#include <plat/iic.h>
+#include <linux/platform_data/mtd-nand-s3c2410.h>
+#include <linux/platform_data/i2c-s3c2410.h>
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
@@ -47,7 +47,7 @@
 #include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/cpu.h>
-#include <plat/mci.h>
+#include <linux/platform_data/mmc-s3cmci.h>
 
 #include "common.h"
 
@@ -118,21 +118,10 @@ static struct s3c2410_platform_nand __initdata at2440evb_nand_info = {
 /* DM9000AEP 10/100 ethernet controller */
 
 static struct resource at2440evb_dm9k_resource[] = {
-	[0] = {
-		.start = S3C2410_CS3,
-		.end   = S3C2410_CS3 + 3,
-		.flags = IORESOURCE_MEM
-	},
-	[1] = {
-		.start = S3C2410_CS3 + 4,
-		.end   = S3C2410_CS3 + 7,
-		.flags = IORESOURCE_MEM
-	},
-	[2] = {
-		.start = IRQ_EINT7,
-		.end   = IRQ_EINT7,
-		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
-	}
+	[0] = DEFINE_RES_MEM(S3C2410_CS3, 4),
+	[1] = DEFINE_RES_MEM(S3C2410_CS3 + 4, 4),
+	[2] = DEFINE_RES_NAMED(IRQ_EINT7, 1, NULL, IORESOURCE_IRQ \
+					| IORESOURCE_IRQ_HIGHEDGE),
 };
 
 static struct dm9000_plat_data at2440evb_dm9k_pdata = {

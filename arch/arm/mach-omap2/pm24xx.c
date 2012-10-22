@@ -29,6 +29,7 @@
 #include <linux/irq.h>
 #include <linux/time.h>
 #include <linux/gpio.h>
+#include <linux/platform_data/gpio-omap.h>
 
 #include <asm/mach/time.h>
 #include <asm/mach/irq.h>
@@ -38,9 +39,6 @@
 #include <plat/clock.h>
 #include <plat/sram.h>
 #include <plat/dma.h>
-#include <plat/board.h>
-
-#include <mach/irqs.h>
 
 #include "common.h"
 #include "prm2xxx_3xxx.h"
@@ -171,8 +169,6 @@ static int omap2_allow_mpu_retention(void)
 
 static void omap2_enter_mpu_retention(void)
 {
-	int only_idle = 0;
-
 	/* Putting MPU into the WFI state while a transfer is active
 	 * seems to cause the I2C block to timeout. Why? Good question. */
 	if (omap2_i2c_active())
@@ -195,7 +191,6 @@ static void omap2_enter_mpu_retention(void)
 
 		omap2_prm_write_mod_reg(OMAP_LOGICRETSTATE_MASK, MPU_MOD,
 						 OMAP2_PM_PWSTCTRL);
-		only_idle = 1;
 	}
 
 	omap2_sram_idle();
@@ -301,12 +296,9 @@ static void __init prcm_setup_regs(void)
 				WKUP_MOD, PM_WKEN);
 }
 
-static int __init omap2_pm_init(void)
+int __init omap2_pm_init(void)
 {
 	u32 l;
-
-	if (!cpu_is_omap24xx())
-		return -ENODEV;
 
 	printk(KERN_INFO "Power Management for OMAP2 initializing\n");
 	l = omap2_prm_read_mod_reg(OCP_MOD, OMAP2_PRCM_REVISION_OFFSET);
@@ -358,32 +350,18 @@ static int __init omap2_pm_init(void)
 
 	prcm_setup_regs();
 
-	/* Hack to prevent MPU retention when STI console is enabled. */
-	{
-		const struct omap_sti_console_config *sti;
-
-		sti = omap_get_config(OMAP_TAG_STI_CONSOLE,
-				      struct omap_sti_console_config);
-		if (sti != NULL && sti->enable)
-			sti_console_enabled = 1;
-	}
-
 	/*
 	 * We copy the assembler sleep/wakeup routines to SRAM.
 	 * These routines need to be in SRAM as that's the only
 	 * memory the MPU can see when it wakes up.
 	 */
-	if (cpu_is_omap24xx()) {
-		omap2_sram_idle = omap_sram_push(omap24xx_idle_loop_suspend,
-						 omap24xx_idle_loop_suspend_sz);
+	omap2_sram_idle = omap_sram_push(omap24xx_idle_loop_suspend,
+					 omap24xx_idle_loop_suspend_sz);
 
-		omap2_sram_suspend = omap_sram_push(omap24xx_cpu_suspend,
-						    omap24xx_cpu_suspend_sz);
-	}
+	omap2_sram_suspend = omap_sram_push(omap24xx_cpu_suspend,
+					    omap24xx_cpu_suspend_sz);
 
 	arm_pm_idle = omap2_pm_idle;
 
 	return 0;
 }
-
-late_initcall(omap2_pm_init);

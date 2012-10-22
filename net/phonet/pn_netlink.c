@@ -5,8 +5,8 @@
  *
  * Copyright (C) 2008 Nokia Corporation.
  *
- * Contact: Remi Denis-Courmont <remi.denis-courmont@nokia.com>
- * Original author: Sakari Ailus <sakari.ailus@nokia.com>
+ * Authors: Sakari Ailus <sakari.ailus@nokia.com>
+ *          Remi Denis-Courmont
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,7 +33,7 @@
 /* Device address handling */
 
 static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
-		     u32 pid, u32 seq, int event);
+		     u32 portid, u32 seq, int event);
 
 void phonet_address_notify(int event, struct net_device *dev, u8 addr)
 {
@@ -101,12 +101,12 @@ static int addr_doit(struct sk_buff *skb, struct nlmsghdr *nlh, void *attr)
 }
 
 static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
-			u32 pid, u32 seq, int event)
+			u32 portid, u32 seq, int event)
 {
 	struct ifaddrmsg *ifm;
 	struct nlmsghdr *nlh;
 
-	nlh = nlmsg_put(skb, pid, seq, event, sizeof(*ifm), 0);
+	nlh = nlmsg_put(skb, portid, seq, event, sizeof(*ifm), 0);
 	if (nlh == NULL)
 		return -EMSGSIZE;
 
@@ -116,7 +116,8 @@ static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
 	ifm->ifa_flags = IFA_F_PERMANENT;
 	ifm->ifa_scope = RT_SCOPE_LINK;
 	ifm->ifa_index = dev->ifindex;
-	NLA_PUT_U8(skb, IFA_LOCAL, addr);
+	if (nla_put_u8(skb, IFA_LOCAL, addr))
+		goto nla_put_failure;
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -147,7 +148,7 @@ static int getaddr_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 				continue;
 
 			if (fill_addr(skb, pnd->netdev, addr << 2,
-					 NETLINK_CB(cb->skb).pid,
+					 NETLINK_CB(cb->skb).portid,
 					cb->nlh->nlmsg_seq, RTM_NEWADDR) < 0)
 				goto out;
 		}
@@ -164,12 +165,12 @@ out:
 /* Routes handling */
 
 static int fill_route(struct sk_buff *skb, struct net_device *dev, u8 dst,
-			u32 pid, u32 seq, int event)
+			u32 portid, u32 seq, int event)
 {
 	struct rtmsg *rtm;
 	struct nlmsghdr *nlh;
 
-	nlh = nlmsg_put(skb, pid, seq, event, sizeof(*rtm), 0);
+	nlh = nlmsg_put(skb, portid, seq, event, sizeof(*rtm), 0);
 	if (nlh == NULL)
 		return -EMSGSIZE;
 
@@ -183,8 +184,9 @@ static int fill_route(struct sk_buff *skb, struct net_device *dev, u8 dst,
 	rtm->rtm_scope = RT_SCOPE_UNIVERSE;
 	rtm->rtm_type = RTN_UNICAST;
 	rtm->rtm_flags = 0;
-	NLA_PUT_U8(skb, RTA_DST, dst);
-	NLA_PUT_U32(skb, RTA_OIF, dev->ifindex);
+	if (nla_put_u8(skb, RTA_DST, dst) ||
+	    nla_put_u32(skb, RTA_OIF, dev->ifindex))
+		goto nla_put_failure;
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -274,7 +276,7 @@ static int route_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 
 		if (addr_idx++ < addr_start_idx)
 			continue;
-		if (fill_route(skb, dev, addr << 2, NETLINK_CB(cb->skb).pid,
+		if (fill_route(skb, dev, addr << 2, NETLINK_CB(cb->skb).portid,
 				cb->nlh->nlmsg_seq, RTM_NEWROUTE))
 			goto out;
 	}

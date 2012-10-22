@@ -15,6 +15,9 @@
 #include <linux/ata_platform.h>
 #include <linux/mtd/nand.h>
 #include <linux/dma-mapping.h>
+#include <linux/clk-provider.h>
+#include <linux/spinlock.h>
+#include <linux/mv643xx_i2c.h>
 #include <net/dsa.h>
 #include <asm/page.h>
 #include <asm/timex.h>
@@ -23,14 +26,15 @@
 #include <asm/mach/time.h>
 #include <mach/kirkwood.h>
 #include <mach/bridge-regs.h>
-#include <plat/audio.h>
+#include <linux/platform_data/asoc-kirkwood.h>
 #include <plat/cache-feroceon-l2.h>
-#include <plat/mvsdio.h>
-#include <plat/orion_nand.h>
-#include <plat/ehci-orion.h>
+#include <linux/platform_data/mmc-mvsdio.h>
+#include <linux/platform_data/mtd-orion_nand.h>
+#include <linux/platform_data/usb-ehci-orion.h>
 #include <plat/common.h>
 #include <plat/time.h>
 #include <plat/addr-map.h>
+#include <linux/platform_data/dma-mv_xor.h>
 #include "common.h"
 
 /*****************************************************************************
@@ -38,17 +42,7 @@
  ****************************************************************************/
 static struct map_desc kirkwood_io_desc[] __initdata = {
 	{
-		.virtual	= KIRKWOOD_PCIE_IO_VIRT_BASE,
-		.pfn		= __phys_to_pfn(KIRKWOOD_PCIE_IO_PHYS_BASE),
-		.length		= KIRKWOOD_PCIE_IO_SIZE,
-		.type		= MT_DEVICE,
-	}, {
-		.virtual	= KIRKWOOD_PCIE1_IO_VIRT_BASE,
-		.pfn		= __phys_to_pfn(KIRKWOOD_PCIE1_IO_PHYS_BASE),
-		.length		= KIRKWOOD_PCIE1_IO_SIZE,
-		.type		= MT_DEVICE,
-	}, {
-		.virtual	= KIRKWOOD_REGS_VIRT_BASE,
+		.virtual	= (unsigned long) KIRKWOOD_REGS_VIRT_BASE,
 		.pfn		= __phys_to_pfn(KIRKWOOD_REGS_PHYS_BASE),
 		.length		= KIRKWOOD_REGS_SIZE,
 		.type		= MT_DEVICE,
@@ -60,20 +54,230 @@ void __init kirkwood_map_io(void)
 	iotable_init(kirkwood_io_desc, ARRAY_SIZE(kirkwood_io_desc));
 }
 
-/*
- * Default clock control bits.  Any bit _not_ set in this variable
- * will be cleared from the hardware after platform devices have been
- * registered.  Some reserved bits must be set to 1.
- */
-unsigned int kirkwood_clk_ctrl = CGC_DUNIT | CGC_RESERVED;
+/*****************************************************************************
+ * CLK tree
+ ****************************************************************************/
 
+static void enable_sata0(void)
+{
+	/* Enable PLL and IVREF */
+	writel(readl(SATA0_PHY_MODE_2) | 0xf, SATA0_PHY_MODE_2);
+	/* Enable PHY */
+	writel(readl(SATA0_IF_CTRL) & ~0x200, SATA0_IF_CTRL);
+}
+
+static void disable_sata0(void)
+{
+	/* Disable PLL and IVREF */
+	writel(readl(SATA0_PHY_MODE_2) & ~0xf, SATA0_PHY_MODE_2);
+	/* Disable PHY */
+	writel(readl(SATA0_IF_CTRL) | 0x200, SATA0_IF_CTRL);
+}
+
+static void enable_sata1(void)
+{
+	/* Enable PLL and IVREF */
+	writel(readl(SATA1_PHY_MODE_2) | 0xf, SATA1_PHY_MODE_2);
+	/* Enable PHY */
+	writel(readl(SATA1_IF_CTRL) & ~0x200, SATA1_IF_CTRL);
+}
+
+static void disable_sata1(void)
+{
+	/* Disable PLL and IVREF */
+	writel(readl(SATA1_PHY_MODE_2) & ~0xf, SATA1_PHY_MODE_2);
+	/* Disable PHY */
+	writel(readl(SATA1_IF_CTRL) | 0x200, SATA1_IF_CTRL);
+}
+
+static void disable_pcie0(void)
+{
+	writel(readl(PCIE_LINK_CTRL) | 0x10, PCIE_LINK_CTRL);
+	while (1)
+		if (readl(PCIE_STATUS) & 0x1)
+			break;
+	writel(readl(PCIE_LINK_CTRL) & ~0x10, PCIE_LINK_CTRL);
+}
+
+static void disable_pcie1(void)
+{
+	u32 dev, rev;
+
+	kirkwood_pcie_id(&dev, &rev);
+
+	if (dev == MV88F6282_DEV_ID) {
+		writel(readl(PCIE1_LINK_CTRL) | 0x10, PCIE1_LINK_CTRL);
+		while (1)
+			if (readl(PCIE1_STATUS) & 0x1)
+				break;
+		writel(readl(PCIE1_LINK_CTRL) & ~0x10, PCIE1_LINK_CTRL);
+	}
+}
+
+/* An extended version of the gated clk. This calls fn_en()/fn_dis
+ * before enabling/disabling the clock.  We use this to turn on/off
+ * PHYs etc.  */
+struct clk_gate_fn {
+	struct clk_gate gate;
+	void (*fn_en)(void);
+	void (*fn_dis)(void);
+};
+
+#define to_clk_gate_fn(_gate) container_of(_gate, struct clk_gate_fn, gate)
+#define to_clk_gate(_hw) container_of(_hw, struct clk_gate, hw)
+
+static int clk_gate_fn_enable(struct clk_hw *hw)
+{
+	struct clk_gate *gate = to_clk_gate(hw);
+	struct clk_gate_fn *gate_fn = to_clk_gate_fn(gate);
+	int ret;
+
+	ret = clk_gate_ops.enable(hw);
+	if (!ret && gate_fn->fn_en)
+		gate_fn->fn_en();
+
+	return ret;
+}
+
+static void clk_gate_fn_disable(struct clk_hw *hw)
+{
+	struct clk_gate *gate = to_clk_gate(hw);
+	struct clk_gate_fn *gate_fn = to_clk_gate_fn(gate);
+
+	if (gate_fn->fn_dis)
+		gate_fn->fn_dis();
+
+	clk_gate_ops.disable(hw);
+}
+
+static struct clk_ops clk_gate_fn_ops;
+
+static struct clk __init *clk_register_gate_fn(struct device *dev,
+		const char *name,
+		const char *parent_name, unsigned long flags,
+		void __iomem *reg, u8 bit_idx,
+		u8 clk_gate_flags, spinlock_t *lock,
+		void (*fn_en)(void), void (*fn_dis)(void))
+{
+	struct clk_gate_fn *gate_fn;
+	struct clk *clk;
+	struct clk_init_data init;
+
+	gate_fn = kzalloc(sizeof(struct clk_gate_fn), GFP_KERNEL);
+	if (!gate_fn) {
+		pr_err("%s: could not allocate gated clk\n", __func__);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	init.name = name;
+	init.ops = &clk_gate_fn_ops;
+	init.flags = flags;
+	init.parent_names = (parent_name ? &parent_name : NULL);
+	init.num_parents = (parent_name ? 1 : 0);
+
+	/* struct clk_gate assignments */
+	gate_fn->gate.reg = reg;
+	gate_fn->gate.bit_idx = bit_idx;
+	gate_fn->gate.flags = clk_gate_flags;
+	gate_fn->gate.lock = lock;
+	gate_fn->gate.hw.init = &init;
+	gate_fn->fn_en = fn_en;
+	gate_fn->fn_dis = fn_dis;
+
+	/* ops is the gate ops, but with our enable/disable functions */
+	if (clk_gate_fn_ops.enable != clk_gate_fn_enable ||
+	    clk_gate_fn_ops.disable != clk_gate_fn_disable) {
+		clk_gate_fn_ops = clk_gate_ops;
+		clk_gate_fn_ops.enable = clk_gate_fn_enable;
+		clk_gate_fn_ops.disable = clk_gate_fn_disable;
+	}
+
+	clk = clk_register(dev, &gate_fn->gate.hw);
+
+	if (IS_ERR(clk))
+		kfree(gate_fn);
+
+	return clk;
+}
+
+static DEFINE_SPINLOCK(gating_lock);
+static struct clk *tclk;
+
+static struct clk __init *kirkwood_register_gate(const char *name, u8 bit_idx)
+{
+	return clk_register_gate(NULL, name, "tclk", 0, CLOCK_GATING_CTRL,
+				 bit_idx, 0, &gating_lock);
+}
+
+static struct clk __init *kirkwood_register_gate_fn(const char *name,
+						    u8 bit_idx,
+						    void (*fn_en)(void),
+						    void (*fn_dis)(void))
+{
+	return clk_register_gate_fn(NULL, name, "tclk", 0, CLOCK_GATING_CTRL,
+				    bit_idx, 0, &gating_lock, fn_en, fn_dis);
+}
+
+static struct clk *ge0, *ge1;
+
+void __init kirkwood_clk_init(void)
+{
+	struct clk *runit, *sata0, *sata1, *usb0, *sdio;
+	struct clk *crypto, *xor0, *xor1, *pex0, *pex1, *audio;
+
+	tclk = clk_register_fixed_rate(NULL, "tclk", NULL,
+				       CLK_IS_ROOT, kirkwood_tclk);
+
+	runit = kirkwood_register_gate("runit",  CGC_BIT_RUNIT);
+	ge0 = kirkwood_register_gate("ge0",    CGC_BIT_GE0);
+	ge1 = kirkwood_register_gate("ge1",    CGC_BIT_GE1);
+	sata0 = kirkwood_register_gate_fn("sata0",  CGC_BIT_SATA0,
+					  enable_sata0, disable_sata0);
+	sata1 = kirkwood_register_gate_fn("sata1",  CGC_BIT_SATA1,
+					  enable_sata1, disable_sata1);
+	usb0 = kirkwood_register_gate("usb0",   CGC_BIT_USB0);
+	sdio = kirkwood_register_gate("sdio",   CGC_BIT_SDIO);
+	crypto = kirkwood_register_gate("crypto", CGC_BIT_CRYPTO);
+	xor0 = kirkwood_register_gate("xor0",   CGC_BIT_XOR0);
+	xor1 = kirkwood_register_gate("xor1",   CGC_BIT_XOR1);
+	pex0 = kirkwood_register_gate_fn("pex0",   CGC_BIT_PEX0,
+					 NULL, disable_pcie0);
+	pex1 = kirkwood_register_gate_fn("pex1",   CGC_BIT_PEX1,
+					 NULL, disable_pcie1);
+	audio = kirkwood_register_gate("audio",  CGC_BIT_AUDIO);
+	kirkwood_register_gate("tdm",    CGC_BIT_TDM);
+	kirkwood_register_gate("tsu",    CGC_BIT_TSU);
+
+	/* clkdev entries, mapping clks to devices */
+	orion_clkdev_add(NULL, "orion_spi.0", runit);
+	orion_clkdev_add(NULL, "orion_spi.1", runit);
+	orion_clkdev_add(NULL, MV643XX_ETH_NAME ".0", ge0);
+	orion_clkdev_add(NULL, MV643XX_ETH_NAME ".1", ge1);
+	orion_clkdev_add(NULL, "orion_wdt", tclk);
+	orion_clkdev_add("0", "sata_mv.0", sata0);
+	orion_clkdev_add("1", "sata_mv.0", sata1);
+	orion_clkdev_add(NULL, "orion-ehci.0", usb0);
+	orion_clkdev_add(NULL, "orion_nand", runit);
+	orion_clkdev_add(NULL, "mvsdio", sdio);
+	orion_clkdev_add(NULL, "mv_crypto", crypto);
+	orion_clkdev_add(NULL, MV_XOR_SHARED_NAME ".0", xor0);
+	orion_clkdev_add(NULL, MV_XOR_SHARED_NAME ".1", xor1);
+	orion_clkdev_add("0", "pcie", pex0);
+	orion_clkdev_add("1", "pcie", pex1);
+	orion_clkdev_add(NULL, "kirkwood-i2s", audio);
+	orion_clkdev_add(NULL, MV64XXX_I2C_CTLR_NAME ".0", runit);
+
+	/* Marvell says runit is used by SPI, UART, NAND, TWSI, ...,
+	 * so should never be gated.
+	 */
+	clk_prepare_enable(runit);
+}
 
 /*****************************************************************************
  * EHCI0
  ****************************************************************************/
 void __init kirkwood_ehci_init(void)
 {
-	kirkwood_clk_ctrl |= CGC_USB0;
 	orion_ehci_init(USB_PHYS_BASE, IRQ_KIRKWOOD_USB, EHCI_PHY_NA);
 }
 
@@ -83,11 +287,12 @@ void __init kirkwood_ehci_init(void)
  ****************************************************************************/
 void __init kirkwood_ge00_init(struct mv643xx_eth_platform_data *eth_data)
 {
-	kirkwood_clk_ctrl |= CGC_GE0;
-
 	orion_ge00_init(eth_data,
 			GE00_PHYS_BASE, IRQ_KIRKWOOD_GE00_SUM,
-			IRQ_KIRKWOOD_GE00_ERR, kirkwood_tclk);
+			IRQ_KIRKWOOD_GE00_ERR, 1600);
+	/* The interface forgets the MAC address assigned by u-boot if
+	the clock is turned off, so claim the clk now. */
+	clk_prepare_enable(ge0);
 }
 
 
@@ -96,12 +301,10 @@ void __init kirkwood_ge00_init(struct mv643xx_eth_platform_data *eth_data)
  ****************************************************************************/
 void __init kirkwood_ge01_init(struct mv643xx_eth_platform_data *eth_data)
 {
-
-	kirkwood_clk_ctrl |= CGC_GE1;
-
 	orion_ge01_init(eth_data,
 			GE01_PHYS_BASE, IRQ_KIRKWOOD_GE01_SUM,
-			IRQ_KIRKWOOD_GE01_ERR, kirkwood_tclk);
+			IRQ_KIRKWOOD_GE01_ERR, 1600);
+	clk_prepare_enable(ge1);
 }
 
 
@@ -143,7 +346,6 @@ static struct platform_device kirkwood_nand_flash = {
 void __init kirkwood_nand_init(struct mtd_partition *parts, int nr_parts,
 			       int chip_delay)
 {
-	kirkwood_clk_ctrl |= CGC_RUNIT;
 	kirkwood_nand_data.parts = parts;
 	kirkwood_nand_data.nr_parts = nr_parts;
 	kirkwood_nand_data.chip_delay = chip_delay;
@@ -153,7 +355,6 @@ void __init kirkwood_nand_init(struct mtd_partition *parts, int nr_parts,
 void __init kirkwood_nand_init_rnb(struct mtd_partition *parts, int nr_parts,
 				   int (*dev_ready)(struct mtd_info *))
 {
-	kirkwood_clk_ctrl |= CGC_RUNIT;
 	kirkwood_nand_data.parts = parts;
 	kirkwood_nand_data.nr_parts = nr_parts;
 	kirkwood_nand_data.dev_ready = dev_ready;
@@ -174,10 +375,6 @@ static void __init kirkwood_rtc_init(void)
  ****************************************************************************/
 void __init kirkwood_sata_init(struct mv_sata_platform_data *sata_data)
 {
-	kirkwood_clk_ctrl |= CGC_SATA0;
-	if (sata_data->n_ports > 1)
-		kirkwood_clk_ctrl |= CGC_SATA1;
-
 	orion_sata_init(sata_data, SATA_PHYS_BASE, IRQ_KIRKWOOD_SATA);
 }
 
@@ -220,7 +417,6 @@ void __init kirkwood_sdio_init(struct mvsdio_platform_data *mvsdio_data)
 		mvsdio_data->clock = 100000000;
 	else
 		mvsdio_data->clock = 200000000;
-	kirkwood_clk_ctrl |= CGC_SDIO;
 	kirkwood_sdio.dev.platform_data = mvsdio_data;
 	platform_device_register(&kirkwood_sdio);
 }
@@ -231,8 +427,7 @@ void __init kirkwood_sdio_init(struct mvsdio_platform_data *mvsdio_data)
  ****************************************************************************/
 void __init kirkwood_spi_init()
 {
-	kirkwood_clk_ctrl |= CGC_RUNIT;
-	orion_spi_init(SPI_PHYS_BASE, kirkwood_tclk);
+	orion_spi_init(SPI_PHYS_BASE);
 }
 
 
@@ -252,7 +447,7 @@ void __init kirkwood_i2c_init(void)
 void __init kirkwood_uart0_init(void)
 {
 	orion_uart0_init(UART0_VIRT_BASE, UART0_PHYS_BASE,
-			 IRQ_KIRKWOOD_UART_0, kirkwood_tclk);
+			 IRQ_KIRKWOOD_UART_0, tclk);
 }
 
 
@@ -262,7 +457,7 @@ void __init kirkwood_uart0_init(void)
 void __init kirkwood_uart1_init(void)
 {
 	orion_uart1_init(UART1_VIRT_BASE, UART1_PHYS_BASE,
-			 IRQ_KIRKWOOD_UART_1, kirkwood_tclk);
+			 IRQ_KIRKWOOD_UART_1, tclk);
 }
 
 /*****************************************************************************
@@ -270,7 +465,6 @@ void __init kirkwood_uart1_init(void)
  ****************************************************************************/
 void __init kirkwood_crypto_init(void)
 {
-	kirkwood_clk_ctrl |= CGC_CRYPTO;
 	orion_crypto_init(CRYPTO_PHYS_BASE, KIRKWOOD_SRAM_PHYS_BASE,
 			  KIRKWOOD_SRAM_SIZE, IRQ_KIRKWOOD_CRYPTO);
 }
@@ -281,8 +475,6 @@ void __init kirkwood_crypto_init(void)
  ****************************************************************************/
 void __init kirkwood_xor0_init(void)
 {
-	kirkwood_clk_ctrl |= CGC_XOR0;
-
 	orion_xor0_init(XOR0_PHYS_BASE, XOR0_HIGH_PHYS_BASE,
 			IRQ_KIRKWOOD_XOR_00, IRQ_KIRKWOOD_XOR_01);
 }
@@ -293,8 +485,6 @@ void __init kirkwood_xor0_init(void)
  ****************************************************************************/
 void __init kirkwood_xor1_init(void)
 {
-	kirkwood_clk_ctrl |= CGC_XOR1;
-
 	orion_xor1_init(XOR1_PHYS_BASE, XOR1_HIGH_PHYS_BASE,
 			IRQ_KIRKWOOD_XOR_10, IRQ_KIRKWOOD_XOR_11);
 }
@@ -305,7 +495,7 @@ void __init kirkwood_xor1_init(void)
  ****************************************************************************/
 void __init kirkwood_wdt_init(void)
 {
-	orion_wdt_init(kirkwood_tclk);
+	orion_wdt_init();
 }
 
 
@@ -315,6 +505,13 @@ void __init kirkwood_wdt_init(void)
 void __init kirkwood_init_early(void)
 {
 	orion_time_set_base(TIMER_VIRT_BASE);
+
+	/*
+	 * Some Kirkwood devices allocate their coherent buffers from atomic
+	 * context. Increase size of atomic coherent pool to make sure such
+	 * the allocations won't fail.
+	 */
+	init_dma_coherent_pool_size(SZ_1M);
 }
 
 int kirkwood_tclk;
@@ -381,7 +578,6 @@ static struct platform_device kirkwood_pcm_device = {
 
 void __init kirkwood_audio_init(void)
 {
-	kirkwood_clk_ctrl |= CGC_AUDIO;
 	platform_device_register(&kirkwood_i2s_device);
 	platform_device_register(&kirkwood_pcm_device);
 }
@@ -437,12 +633,14 @@ char * __init kirkwood_id(void)
 
 void __init kirkwood_l2_init(void)
 {
+#ifdef CONFIG_CACHE_FEROCEON_L2
 #ifdef CONFIG_CACHE_FEROCEON_L2_WRITETHROUGH
 	writel(readl(L2_CONFIG_REG) | L2_WRITETHROUGH, L2_CONFIG_REG);
 	feroceon_l2_init(1);
 #else
 	writel(readl(L2_CONFIG_REG) & ~L2_WRITETHROUGH, L2_CONFIG_REG);
 	feroceon_l2_init(0);
+#endif
 #endif
 }
 
@@ -461,9 +659,10 @@ void __init kirkwood_init(void)
 
 	kirkwood_setup_cpu_mbus();
 
-#ifdef CONFIG_CACHE_FEROCEON_L2
 	kirkwood_l2_init();
-#endif
+
+	/* Setup root of clk tree */
+	kirkwood_clk_init();
 
 	/* internal devices that every board has */
 	kirkwood_rtc_init();
@@ -476,61 +675,6 @@ void __init kirkwood_init(void)
 	kexec_reinit = kirkwood_enable_pcie;
 #endif
 }
-
-static int __init kirkwood_clock_gate(void)
-{
-	unsigned int curr = readl(CLOCK_GATING_CTRL);
-	u32 dev, rev;
-
-	kirkwood_pcie_id(&dev, &rev);
-	printk(KERN_DEBUG "Gating clock of unused units\n");
-	printk(KERN_DEBUG "before: 0x%08x\n", curr);
-
-	/* Make sure those units are accessible */
-	writel(curr | CGC_SATA0 | CGC_SATA1 | CGC_PEX0 | CGC_PEX1, CLOCK_GATING_CTRL);
-
-	/* For SATA: first shutdown the phy */
-	if (!(kirkwood_clk_ctrl & CGC_SATA0)) {
-		/* Disable PLL and IVREF */
-		writel(readl(SATA0_PHY_MODE_2) & ~0xf, SATA0_PHY_MODE_2);
-		/* Disable PHY */
-		writel(readl(SATA0_IF_CTRL) | 0x200, SATA0_IF_CTRL);
-	}
-	if (!(kirkwood_clk_ctrl & CGC_SATA1)) {
-		/* Disable PLL and IVREF */
-		writel(readl(SATA1_PHY_MODE_2) & ~0xf, SATA1_PHY_MODE_2);
-		/* Disable PHY */
-		writel(readl(SATA1_IF_CTRL) | 0x200, SATA1_IF_CTRL);
-	}
-	
-	/* For PCIe: first shutdown the phy */
-	if (!(kirkwood_clk_ctrl & CGC_PEX0)) {
-		writel(readl(PCIE_LINK_CTRL) | 0x10, PCIE_LINK_CTRL);
-		while (1)
-			if (readl(PCIE_STATUS) & 0x1)
-				break;
-		writel(readl(PCIE_LINK_CTRL) & ~0x10, PCIE_LINK_CTRL);
-	}
-
-	/* For PCIe 1: first shutdown the phy */
-	if (dev == MV88F6282_DEV_ID) {
-		if (!(kirkwood_clk_ctrl & CGC_PEX1)) {
-			writel(readl(PCIE1_LINK_CTRL) | 0x10, PCIE1_LINK_CTRL);
-			while (1)
-				if (readl(PCIE1_STATUS) & 0x1)
-					break;
-			writel(readl(PCIE1_LINK_CTRL) & ~0x10, PCIE1_LINK_CTRL);
-		}
-	} else  /* keep this bit set for devices that don't have PCIe1 */
-		kirkwood_clk_ctrl |= CGC_PEX1;
-
-	/* Now gate clock the required units */
-	writel(kirkwood_clk_ctrl, CLOCK_GATING_CTRL);
-	printk(KERN_DEBUG " after: 0x%08x\n", readl(CLOCK_GATING_CTRL));
-
-	return 0;
-}
-late_initcall(kirkwood_clock_gate);
 
 void kirkwood_restart(char mode, const char *cmd)
 {

@@ -196,8 +196,8 @@ enum MonitorModeSelector {
 #define K1212_ADAT_BUF_SIZE	(K1212_ADAT_CHANNELS * 2 * kPlayBufferFrames * kNumBuffers)
 #define K1212_MAX_BUF_SIZE	(K1212_ANALOG_BUF_SIZE + K1212_ADAT_BUF_SIZE)
 
-#define k1212MinADCSens     0x7f
-#define k1212MaxADCSens     0x00
+#define k1212MinADCSens     0x00
+#define k1212MaxADCSens     0x7f
 #define k1212MaxVolume      0x7fff
 #define k1212MaxWaveVolume  0xffff
 #define k1212MinVolume      0x0000
@@ -2476,22 +2476,11 @@ static void __devexit snd_korg1212_remove(struct pci_dev *pci)
 	pci_set_drvdata(pci, NULL);
 }
 
-static struct pci_driver driver = {
+static struct pci_driver korg1212_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_korg1212_ids,
 	.probe = snd_korg1212_probe,
 	.remove = __devexit_p(snd_korg1212_remove),
 };
 
-static int __init alsa_card_korg1212_init(void)
-{
-	return pci_register_driver(&driver);
-}
-
-static void __exit alsa_card_korg1212_exit(void)
-{
-	pci_unregister_driver(&driver);
-}
-
-module_init(alsa_card_korg1212_init)
-module_exit(alsa_card_korg1212_exit)
+module_pci_driver(korg1212_driver);

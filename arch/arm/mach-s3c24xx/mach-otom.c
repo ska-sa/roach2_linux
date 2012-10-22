@@ -35,7 +35,7 @@
 #include <plat/s3c2410.h>
 #include <plat/clock.h>
 #include <plat/devs.h>
-#include <plat/iic.h>
+#include <linux/platform_data/i2c-s3c2410.h>
 #include <plat/cpu.h>
 
 #include "common.h"
@@ -77,11 +77,7 @@ static struct s3c2410_uartcfg otom11_uartcfgs[] __initdata = {
 /* NOR Flash on NexVision OTOM board */
 
 static struct resource otom_nor_resource[] = {
-	[0] = {
-		.start = S3C2410_CS0,
-		.end   = S3C2410_CS0 + (4*1024*1024) - 1,
-		.flags = IORESOURCE_MEM,
-	}
+	[0] = DEFINE_RES_MEM(S3C2410_CS0, SZ_4M),
 };
 
 static struct platform_device otom_device_nor = {

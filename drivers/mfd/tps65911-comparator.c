@@ -26,7 +26,7 @@
 #define COMP1					1
 #define COMP2					2
 
-/* Comparator 1 voltage selection table in milivolts */
+/* Comparator 1 voltage selection table in millivolts */
 static const u16 COMP_VSEL_TABLE[] = {
 	0, 2500, 2500, 2500, 2500, 2550, 2600, 2650,
 	2700, 2750, 2800, 2850, 2900, 2950, 3000, 3050,
@@ -136,7 +136,7 @@ static __devinit int tps65911_comparator_probe(struct platform_device *pdev)
 
 	ret = comp_threshold_set(tps65910, COMP2, pdata->vmbch2_threshold);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "cannot set COMP2 theshold\n");
+		dev_err(&pdev->dev, "cannot set COMP2 threshold\n");
 		return ret;
 	}
 

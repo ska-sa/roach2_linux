@@ -64,7 +64,14 @@ static void __iomem *scu_base_addr(void)
 static DEFINE_SPINLOCK(scu_lock);
 static unsigned long tmp;
 
+#ifdef CONFIG_HAVE_ARM_TWD
 static DEFINE_TWD_LOCAL_TIMER(twd_local_timer, 0xf0000600, 29);
+
+void __init r8a7779_register_twd(void)
+{
+	twd_local_timer_register(&twd_local_timer);
+}
+#endif
 
 static void modify_scu_cpu_psr(unsigned long set, unsigned long clr)
 {
@@ -80,15 +87,14 @@ static void modify_scu_cpu_psr(unsigned long set, unsigned long clr)
 	__raw_writel(tmp, scu_base + 8);
 }
 
-unsigned int __init r8a7779_get_core_count(void)
+static unsigned int __init r8a7779_get_core_count(void)
 {
 	void __iomem *scu_base = scu_base_addr();
 
-	shmobile_twd_init(&twd_local_timer);
 	return scu_get_core_count(scu_base);
 }
 
-int r8a7779_platform_cpu_kill(unsigned int cpu)
+static int r8a7779_platform_cpu_kill(unsigned int cpu)
 {
 	struct r8a7779_pm_ch *ch = NULL;
 	int ret = -EIO;
@@ -107,12 +113,31 @@ int r8a7779_platform_cpu_kill(unsigned int cpu)
 	return ret ? ret : 1;
 }
 
-void __cpuinit r8a7779_secondary_init(unsigned int cpu)
+static int __maybe_unused r8a7779_cpu_kill(unsigned int cpu)
+{
+	int k;
+
+	/* this function is running on another CPU than the offline target,
+	 * here we need wait for shutdown code in platform_cpu_die() to
+	 * finish before asking SoC-specific code to power off the CPU core.
+	 */
+	for (k = 0; k < 1000; k++) {
+		if (shmobile_cpu_is_dead(cpu))
+			return r8a7779_platform_cpu_kill(cpu);
+
+		mdelay(1);
+	}
+
+	return 0;
+}
+
+
+static void __cpuinit r8a7779_secondary_init(unsigned int cpu)
 {
 	gic_secondary_init(0);
 }
 
-int __cpuinit r8a7779_boot_secondary(unsigned int cpu)
+static int __cpuinit r8a7779_boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
 	struct r8a7779_pm_ch *ch = NULL;
 	int ret = -EIO;
@@ -131,7 +156,7 @@ int __cpuinit r8a7779_boot_secondary(unsigned int cpu)
 	return ret;
 }
 
-void __init r8a7779_smp_prepare_cpus(void)
+static void __init r8a7779_smp_prepare_cpus(unsigned int max_cpus)
 {
 	int cpu = cpu_logical_map(0);
 
@@ -150,3 +175,22 @@ void __init r8a7779_smp_prepare_cpus(void)
 	r8a7779_platform_cpu_kill(2);
 	r8a7779_platform_cpu_kill(3);
 }
+
+static void __init r8a7779_smp_init_cpus(void)
+{
+	unsigned int ncores = r8a7779_get_core_count();
+
+	shmobile_smp_init_cpus(ncores);
+}
+
+struct smp_operations r8a7779_smp_ops  __initdata = {
+	.smp_init_cpus		= r8a7779_smp_init_cpus,
+	.smp_prepare_cpus	= r8a7779_smp_prepare_cpus,
+	.smp_secondary_init	= r8a7779_secondary_init,
+	.smp_boot_secondary	= r8a7779_boot_secondary,
+#ifdef CONFIG_HOTPLUG_CPU
+	.cpu_kill		= r8a7779_cpu_kill,
+	.cpu_die		= shmobile_cpu_die,
+	.cpu_disable		= shmobile_cpu_disable,
+#endif
+};

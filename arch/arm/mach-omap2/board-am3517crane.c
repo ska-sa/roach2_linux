@@ -21,25 +21,19 @@
 #include <linux/init.h>
 #include <linux/gpio.h>
 
-#include <mach/hardware.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 
-#include <plat/board.h>
 #include "common.h"
 #include <plat/usb.h>
 
+#include "am35xx-emac.h"
 #include "mux.h"
 #include "control.h"
 
 #define GPIO_USB_POWER		35
 #define GPIO_USB_NRESET		38
-
-
-/* Board initialization */
-static struct omap_board_config_kernel am3517_crane_config[] __initdata = {
-};
 
 #ifdef CONFIG_OMAP_MUX
 static struct omap_board_mux board_mux[] __initdata = {
@@ -66,9 +60,6 @@ static void __init am3517_crane_init(void)
 	omap_serial_init();
 	omap_sdrc_init(NULL, NULL);
 
-	omap_board_config = am3517_crane_config;
-	omap_board_config_size = ARRAY_SIZE(am3517_crane_config);
-
 	/* Configure GPIO for EHCI port */
 	if (omap_mux_init_gpio(GPIO_USB_NRESET, OMAP_PIN_OUTPUT)) {
 		pr_err("Can not configure mux for GPIO_USB_NRESET %d\n",
@@ -90,6 +81,7 @@ static void __init am3517_crane_init(void)
 	}
 
 	usbhs_init(&usbhs_bdata);
+	am35xx_emac_init(AM35XX_DEFAULT_MDIO_FREQUENCY, 1);
 }
 
 MACHINE_START(CRANEBOARD, "AM3517/05 CRANEBOARD")
@@ -100,6 +92,7 @@ MACHINE_START(CRANEBOARD, "AM3517/05 CRANEBOARD")
 	.init_irq	= omap3_init_irq,
 	.handle_irq	= omap3_intc_handle_irq,
 	.init_machine	= am3517_crane_init,
+	.init_late	= am35xx_init_late,
 	.timer		= &omap3_timer,
 	.restart	= omap_prcm_restart,
 MACHINE_END

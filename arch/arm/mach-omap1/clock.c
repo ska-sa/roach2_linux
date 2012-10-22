@@ -194,9 +194,8 @@ int omap1_select_table_rate(struct clk *clk, unsigned long rate)
 {
 	/* Find the highest supported frequency <= rate and switch to it */
 	struct mpu_rate * ptr;
-	unsigned long dpll1_rate, ref_rate;
+	unsigned long ref_rate;
 
-	dpll1_rate = ck_dpll1_p->rate;
 	ref_rate = ck_ref_p->rate;
 
 	for (ptr = omap1_rate_table; ptr->rate; ptr++) {
@@ -588,8 +587,8 @@ void omap1_clk_disable_unused(struct clk *clk)
 	/* Clocks in the DSP domain need api_ck. Just assume bootloader
 	 * has not enabled any DSP clocks */
 	if (clk->enable_reg == DSP_IDLECT2) {
-		printk(KERN_INFO "Skipping reset check for DSP domain "
-		       "clock \"%s\"\n", clk->name);
+		pr_info("Skipping reset check for DSP domain clock \"%s\"\n",
+			clk->name);
 		return;
 	}
 

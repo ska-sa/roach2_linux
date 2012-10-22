@@ -69,14 +69,8 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <pwd.h>
 #include <inttypes.h>
-#include "../../../include/linux/magic.h"
+#include <linux/magic.h>
 #include "types.h"
 #include <sys/ttydefaults.h>
 
@@ -249,8 +243,6 @@ struct perf_event_attr;
 
 void event_attr_init(struct perf_event_attr *attr);
 
-uid_t parse_target_uid(const char *str, const char *tid, const char *pid);
-
 #define _STR(x) #x
 #define STR(x) _STR(x)
 
@@ -264,5 +256,11 @@ bool is_power_of_2(unsigned long n)
 {
 	return (n != 0 && ((n & (n - 1)) == 0));
 }
+
+size_t hex_width(u64 v);
+
+char *rtrim(char *s);
+
+void dump_stack(void);
 
 #endif

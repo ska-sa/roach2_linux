@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2011 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -182,8 +182,10 @@ void ovs_flow_used(struct sw_flow *flow, struct sk_buff *skb)
 {
 	u8 tcp_flags = 0;
 
-	if (flow->key.eth.type == htons(ETH_P_IP) &&
-	    flow->key.ip.proto == IPPROTO_TCP) {
+	if ((flow->key.eth.type == htons(ETH_P_IP) ||
+	     flow->key.eth.type == htons(ETH_P_IPV6)) &&
+	    flow->key.ip.proto == IPPROTO_TCP &&
+	    likely(skb->len >= skb_transport_offset(skb) + sizeof(struct tcphdr))) {
 		u8 *tcp = (u8 *)tcp_hdr(skb);
 		tcp_flags = *(tcp + TCP_FLAGS_OFFSET) & TCP_FLAG_MASK;
 	}
@@ -201,10 +203,7 @@ struct sw_flow_actions *ovs_flow_actions_alloc(const struct nlattr *actions)
 	int actions_len = nla_len(actions);
 	struct sw_flow_actions *sfa;
 
-	/* At least DP_MAX_PORTS actions are required to be able to flood a
-	 * packet to every port.  Factor of 2 allows for setting VLAN tags,
-	 * etc. */
-	if (actions_len > 2 * DP_MAX_PORTS * nla_total_size(4))
+	if (actions_len > MAX_ACTIONS_BUFSIZE)
 		return ERR_PTR(-EINVAL);
 
 	sfa = kmalloc(sizeof(*sfa) + actions_len, GFP_KERNEL);
@@ -425,19 +424,11 @@ void ovs_flow_deferred_free(struct sw_flow *flow)
 	call_rcu(&flow->rcu, rcu_free_flow_callback);
 }
 
-/* RCU callback used by ovs_flow_deferred_free_acts. */
-static void rcu_free_acts_callback(struct rcu_head *rcu)
-{
-	struct sw_flow_actions *sf_acts = container_of(rcu,
-			struct sw_flow_actions, rcu);
-	kfree(sf_acts);
-}
-
 /* Schedules 'sf_acts' to be freed after the next RCU grace period.
  * The caller must hold rcu_read_lock for this to be sensible. */
 void ovs_flow_deferred_free_acts(struct sw_flow_actions *sf_acts)
 {
-	call_rcu(&sf_acts->rcu, rcu_free_acts_callback);
+	kfree_rcu(sf_acts, rcu);
 }
 
 static int parse_vlan(struct sk_buff *skb, struct sw_flow_key *key)
@@ -998,7 +989,7 @@ int ovs_flow_from_nlattrs(struct sw_flow_key *swkey, int *key_lenp,
 		swkey->phy.in_port = in_port;
 		attrs &= ~(1 << OVS_KEY_ATTR_IN_PORT);
 	} else {
-		swkey->phy.in_port = USHRT_MAX;
+		swkey->phy.in_port = DP_MAX_PORTS;
 	}
 
 	/* Data attributes. */
@@ -1141,7 +1132,7 @@ int ovs_flow_metadata_from_nlattrs(u32 *priority, u16 *in_port,
 	const struct nlattr *nla;
 	int rem;
 
-	*in_port = USHRT_MAX;
+	*in_port = DP_MAX_PORTS;
 	*priority = 0;
 
 	nla_for_each_nested(nla, attr, rem) {
@@ -1174,11 +1165,13 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 	struct ovs_key_ethernet *eth_key;
 	struct nlattr *nla, *encap;
 
-	if (swkey->phy.priority)
-		NLA_PUT_U32(skb, OVS_KEY_ATTR_PRIORITY, swkey->phy.priority);
+	if (swkey->phy.priority &&
+	    nla_put_u32(skb, OVS_KEY_ATTR_PRIORITY, swkey->phy.priority))
+		goto nla_put_failure;
 
-	if (swkey->phy.in_port != USHRT_MAX)
-		NLA_PUT_U32(skb, OVS_KEY_ATTR_IN_PORT, swkey->phy.in_port);
+	if (swkey->phy.in_port != DP_MAX_PORTS &&
+	    nla_put_u32(skb, OVS_KEY_ATTR_IN_PORT, swkey->phy.in_port))
+		goto nla_put_failure;
 
 	nla = nla_reserve(skb, OVS_KEY_ATTR_ETHERNET, sizeof(*eth_key));
 	if (!nla)
@@ -1188,8 +1181,9 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 	memcpy(eth_key->eth_dst, swkey->eth.dst, ETH_ALEN);
 
 	if (swkey->eth.tci || swkey->eth.type == htons(ETH_P_8021Q)) {
-		NLA_PUT_BE16(skb, OVS_KEY_ATTR_ETHERTYPE, htons(ETH_P_8021Q));
-		NLA_PUT_BE16(skb, OVS_KEY_ATTR_VLAN, swkey->eth.tci);
+		if (nla_put_be16(skb, OVS_KEY_ATTR_ETHERTYPE, htons(ETH_P_8021Q)) ||
+		    nla_put_be16(skb, OVS_KEY_ATTR_VLAN, swkey->eth.tci))
+			goto nla_put_failure;
 		encap = nla_nest_start(skb, OVS_KEY_ATTR_ENCAP);
 		if (!swkey->eth.tci)
 			goto unencap;
@@ -1200,7 +1194,8 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 	if (swkey->eth.type == htons(ETH_P_802_2))
 		goto unencap;
 
-	NLA_PUT_BE16(skb, OVS_KEY_ATTR_ETHERTYPE, swkey->eth.type);
+	if (nla_put_be16(skb, OVS_KEY_ATTR_ETHERTYPE, swkey->eth.type))
+		goto nla_put_failure;
 
 	if (swkey->eth.type == htons(ETH_P_IP)) {
 		struct ovs_key_ipv4 *ipv4_key;

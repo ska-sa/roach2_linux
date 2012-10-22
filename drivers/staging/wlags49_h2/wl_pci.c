@@ -223,7 +223,7 @@ int wl_adapter_init_module( void )
  ******************************************************************************/
 void wl_adapter_cleanup_module( void )
 {
-	//;?how comes wl_adapter_cleanup_module is located in a seemingly pci specific module
+	//;?how come wl_adapter_cleanup_module is located in a seemingly pci specific module
     DBG_FUNC( "wl_adapter_cleanup_module" );
     DBG_ENTER( DbgInfo );
 
@@ -385,7 +385,7 @@ int wl_adapter_is_open( struct net_device *dev )
  *  DESCRIPTION:
  *
  *      Registered in the pci_driver structure, this function is called when the
- *  PCI subsystem finds a new PCI device which matches the infomation contained
+ *  PCI subsystem finds a new PCI device which matches the information contained
  *  in the pci_device_id table.
  *
  *  PARAMETERS:
@@ -424,7 +424,7 @@ int __devinit wl_pci_probe( struct pci_dev *pdev,
  *  DESCRIPTION:
  *
  *      Registered in the pci_driver structure, this function is called when the
- *  PCI subsystem detects that a PCI device which matches the infomation
+ *  PCI subsystem detects that a PCI device which matches the information
  *  contained in the pci_device_id table has been removed.
  *
  *  PARAMETERS:
@@ -524,6 +524,7 @@ int wl_pci_setup( struct pci_dev *pdev )
     /* Make sure that space was allocated for our private adapter struct */
     if( dev->priv == NULL ) {
         DBG_ERROR( DbgInfo, "Private adapter struct was not allocated!!!\n" );
+	wl_device_dealloc(dev);
         DBG_LEAVE( DbgInfo );
         return -ENOMEM;
     }
@@ -532,6 +533,7 @@ int wl_pci_setup( struct pci_dev *pdev )
     /* Allocate DMA Descriptors */
     if( wl_pci_dma_alloc( pdev, dev->priv ) < 0 ) {
         DBG_ERROR( DbgInfo, "Could not allocate DMA descriptor memory!!!\n" );
+	wl_device_dealloc(dev);
         DBG_LEAVE( DbgInfo );
         return -ENOMEM;
     }
@@ -561,6 +563,8 @@ int wl_pci_setup( struct pci_dev *pdev )
     result = request_irq(dev->irq, wl_isr, SA_SHIRQ, dev->name, dev);
     if( result ) {
         DBG_WARNING( DbgInfo, "Could not register ISR!!!\n" );
+	wl_remove(dev);
+	wl_device_dealloc(dev);
         DBG_LEAVE( DbgInfo );
         return result;
 	}
@@ -895,7 +899,7 @@ int wl_pci_dma_free_tx_packet( struct pci_dev *pdev, struct wl_private *lp,
  *  DESCRIPTION:
  *
  *      Allocates a single Rx packet, consisting of two descriptors and one
- *      contiguous buffer. THe buffer starts with the hermes-specific header.
+ *      contiguous buffer. The buffer starts with the hermes-specific header.
  *      One descriptor points at the start, the other at offset 0x3a of the
  *      buffer.
  *

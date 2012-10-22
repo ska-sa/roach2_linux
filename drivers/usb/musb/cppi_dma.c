@@ -6,6 +6,7 @@
  * The TUSB6020, using VLYNQ, has CPPI that looks much like DaVinci.
  */
 
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/usb.h>
@@ -1315,7 +1316,7 @@ irqreturn_t cppi_interrupt(int irq, void *dev_id)
 }
 
 /* Instantiate a software object representing a DMA controller. */
-struct dma_controller *__init
+struct dma_controller *__devinit
 dma_controller_create(struct musb *musb, void __iomem *mregs)
 {
 	struct cppi		*controller;

@@ -22,8 +22,8 @@
 #include <linux/gpio.h>
 #include <linux/slab.h>
 
-#include "../iio.h"
-#include "../trigger.h"
+#include <linux/iio/iio.h>
+#include <linux/iio/trigger.h>
 
 static LIST_HEAD(iio_gpio_trigger_list);
 static DEFINE_MUTEX(iio_gpio_trigger_list_lock);
@@ -51,7 +51,7 @@ static const struct iio_trigger_ops iio_gpio_trigger_ops = {
 	.owner = THIS_MODULE,
 };
 
-static int iio_gpio_trigger_probe(struct platform_device *pdev)
+static int __devinit iio_gpio_trigger_probe(struct platform_device *pdev)
 {
 	struct iio_gpio_trigger_info *trig_info;
 	struct iio_trigger *trig, *trig2;
@@ -72,7 +72,7 @@ static int iio_gpio_trigger_probe(struct platform_device *pdev)
 
 		for (irq = irq_res->start; irq <= irq_res->end; irq++) {
 
-			trig = iio_allocate_trigger("irqtrig%d", irq);
+			trig = iio_trigger_alloc("irqtrig%d", irq);
 			if (!trig) {
 				ret = -ENOMEM;
 				goto error_free_completed_registrations;
@@ -114,7 +114,7 @@ error_release_irq:
 error_free_trig_info:
 	kfree(trig_info);
 error_put_trigger:
-	iio_put_trigger(trig);
+	iio_trigger_put(trig);
 error_free_completed_registrations:
 	/* The rest should have been added to the iio_gpio_trigger_list */
 	list_for_each_entry_safe(trig,
@@ -130,7 +130,7 @@ error_free_completed_registrations:
 	return ret;
 }
 
-static int iio_gpio_trigger_remove(struct platform_device *pdev)
+static int __devexit iio_gpio_trigger_remove(struct platform_device *pdev)
 {
 	struct iio_trigger *trig, *trig2;
 	struct iio_gpio_trigger_info *trig_info;
@@ -144,7 +144,7 @@ static int iio_gpio_trigger_remove(struct platform_device *pdev)
 		iio_trigger_unregister(trig);
 		free_irq(trig_info->irq, trig);
 		kfree(trig_info);
-		iio_put_trigger(trig);
+		iio_trigger_put(trig);
 	}
 	mutex_unlock(&iio_gpio_trigger_list_lock);
 
@@ -153,7 +153,7 @@ static int iio_gpio_trigger_remove(struct platform_device *pdev)
 
 static struct platform_driver iio_gpio_trigger_driver = {
 	.probe = iio_gpio_trigger_probe,
-	.remove = iio_gpio_trigger_remove,
+	.remove = __devexit_p(iio_gpio_trigger_remove),
 	.driver = {
 		.name = "iio_gpio_trigger",
 		.owner = THIS_MODULE,
@@ -162,6 +162,6 @@ static struct platform_driver iio_gpio_trigger_driver = {
 
 module_platform_driver(iio_gpio_trigger_driver);
 
-MODULE_AUTHOR("Jonathan Cameron <jic23@cam.ac.uk>");
+MODULE_AUTHOR("Jonathan Cameron <jic23@kernel.org>");
 MODULE_DESCRIPTION("Example gpio trigger for the iio subsystem");
 MODULE_LICENSE("GPL v2");

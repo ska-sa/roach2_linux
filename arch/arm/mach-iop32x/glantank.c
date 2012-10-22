@@ -96,11 +96,10 @@ glantank_pci_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 }
 
 static struct hw_pci glantank_pci __initdata = {
-	.swizzle	= pci_std_swizzle,
 	.nr_controllers = 1,
+	.ops		= &iop3xx_ops,
 	.setup		= iop3xx_pci_setup,
 	.preinit	= iop3xx_pci_preinit,
-	.scan		= iop3xx_pci_scan_bus,
 	.map_irq	= glantank_pci_map_irq,
 };
 
@@ -184,7 +183,7 @@ static struct i2c_board_info __initdata glantank_i2c_devices[] = {
 
 static void glantank_power_off(void)
 {
-	__raw_writeb(0x01, 0xfe8d0004);
+	__raw_writeb(0x01, IOMEM(0xfe8d0004));
 
 	while (1)
 		;

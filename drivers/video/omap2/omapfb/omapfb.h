@@ -148,8 +148,9 @@ static inline struct omap_dss_device *fb2display(struct fb_info *fbi)
 
 	/* XXX: returns the display connected to first attached overlay */
 	for (i = 0; i < ofbi->num_overlays; i++) {
-		if (ofbi->overlays[i]->manager)
-			return ofbi->overlays[i]->manager->device;
+		struct omap_overlay *ovl = ofbi->overlays[i];
+
+		return ovl->get_device(ovl);
 	}
 
 	return NULL;
@@ -166,6 +167,7 @@ static inline struct omapfb_display_data *get_display_data(
 
 	/* This should never happen */
 	BUG();
+	return NULL;
 }
 
 static inline void omapfb_lock(struct omapfb2_device *fbdev)

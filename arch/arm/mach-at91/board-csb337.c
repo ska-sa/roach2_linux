@@ -39,6 +39,7 @@
 
 #include <mach/hardware.h>
 #include <mach/board.h>
+#include <mach/at91_aic.h>
 
 #include "generic.h"
 
@@ -47,15 +48,6 @@ static void __init csb337_init_early(void)
 {
 	/* Initialize processor: 3.6864 MHz crystal */
 	at91_initialize(3686400);
-
-	/* Setup the LEDs */
-	at91_init_leds(AT91_PIN_PB0, AT91_PIN_PB1);
-
-	/* DBGU on ttyS0 */
-	at91_register_uart(0, 0, 0);
-
-	/* make console=ttyS0 the default */
-	at91_set_serial_console(0);
 }
 
 static struct macb_platform_data __initdata csb337_eth_data = {
@@ -95,12 +87,12 @@ static struct at91_cf_data __initdata csb337_cf_data = {
 	.rst_pin	= AT91_PIN_PD2,
 };
 
-static struct at91_mmc_data __initdata csb337_mmc_data = {
-	.det_pin	= AT91_PIN_PD5,
-	.slot_b		= 0,
-	.wire4		= 1,
-	.wp_pin		= AT91_PIN_PD6,
-	.vcc_pin	= -EINVAL,
+static struct mci_platform_data __initdata csb337_mci0_data = {
+	.slot[0] = {
+		.bus_width	= 4,
+		.detect_pin	= AT91_PIN_PD5,
+		.wp_pin		= AT91_PIN_PD6,
+	},
 };
 
 static struct spi_board_info csb337_spi_devices[] = {
@@ -229,6 +221,8 @@ static struct gpio_led csb_leds[] = {
 static void __init csb337_board_init(void)
 {
 	/* Serial */
+	/* DBGU on ttyS0 */
+	at91_register_uart(0, 0, 0);
 	at91_add_device_serial();
 	/* Ethernet */
 	at91_add_device_eth(&csb337_eth_data);
@@ -244,7 +238,7 @@ static void __init csb337_board_init(void)
 	/* SPI */
 	at91_add_device_spi(csb337_spi_devices, ARRAY_SIZE(csb337_spi_devices));
 	/* MMC */
-	at91_add_device_mmc(0, &csb337_mmc_data);
+	at91_add_device_mci(0, &csb337_mci0_data);
 	/* NOR flash */
 	platform_device_register(&csb_flash);
 	/* LEDs */
@@ -257,6 +251,7 @@ MACHINE_START(CSB337, "Cogent CSB337")
 	/* Maintainer: Bill Gatliff */
 	.timer		= &at91rm9200_timer,
 	.map_io		= at91_map_io,
+	.handle_irq	= at91_aic_handle_irq,
 	.init_early	= csb337_init_early,
 	.init_irq	= at91_init_irq_default,
 	.init_machine	= csb337_board_init,

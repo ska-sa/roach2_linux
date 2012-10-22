@@ -24,7 +24,7 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/pci.h>
 #include <mach/orion5x.h>
-#include <plat/orion_nand.h>
+#include <linux/platform_data/mtd-orion_nand.h>
 #include "common.h"
 #include "mpp.h"
 
@@ -265,7 +265,6 @@ static int __init db88f5281_pci_map_irq(const struct pci_dev *dev, u8 slot,
 static struct hw_pci db88f5281_pci __initdata = {
 	.nr_controllers	= 2,
 	.preinit	= db88f5281_pci_preinit,
-	.swizzle	= pci_std_swizzle,
 	.setup		= orion5x_pci_sys_setup,
 	.scan		= orion5x_pci_sys_scan_bus,
 	.map_irq	= db88f5281_pci_map_irq,

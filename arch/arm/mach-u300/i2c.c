@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-u300/i2c.c
  *
- * Copyright (C) 2009 ST-Ericsson AB
+ * Copyright (C) 2009-2012 ST-Ericsson AB
  * License terms: GNU General Public License (GPL) version 2
  *
  * Register board i2c devices
@@ -9,7 +9,7 @@
  */
 #include <linux/kernel.h>
 #include <linux/i2c.h>
-#include <linux/mfd/abx500.h>
+#include <linux/mfd/ab3100.h>
 #include <linux/regulator/machine.h>
 #include <linux/amba/bus.h>
 #include <mach/irqs.h>
@@ -146,9 +146,6 @@ static struct ab3100_platform_data ab3100_plf_data = {
 				.min_uV = 1800000,
 				.max_uV = 1800000,
 				.valid_modes_mask = REGULATOR_MODE_NORMAL,
-				.valid_ops_mask =
-				REGULATOR_CHANGE_VOLTAGE |
-				REGULATOR_CHANGE_STATUS,
 				.always_on = 1,
 				.boot_on = 1,
 			},
@@ -160,9 +157,6 @@ static struct ab3100_platform_data ab3100_plf_data = {
 				.min_uV = 2500000,
 				.max_uV = 2500000,
 				.valid_modes_mask = REGULATOR_MODE_NORMAL,
-				.valid_ops_mask =
-				REGULATOR_CHANGE_VOLTAGE |
-				REGULATOR_CHANGE_STATUS,
 				.always_on = 1,
 				.boot_on = 1,
 			},
@@ -230,8 +224,7 @@ static struct ab3100_platform_data ab3100_plf_data = {
 				.max_uV = 1800000,
 				.valid_modes_mask = REGULATOR_MODE_NORMAL,
 				.valid_ops_mask =
-				REGULATOR_CHANGE_VOLTAGE |
-				REGULATOR_CHANGE_STATUS,
+				REGULATOR_CHANGE_VOLTAGE,
 				.always_on = 1,
 				.boot_on = 1,
 			},
@@ -268,7 +261,6 @@ static struct i2c_board_info __initdata bus0_i2c_board_info[] = {
 };
 
 static struct i2c_board_info __initdata bus1_i2c_board_info[] = {
-#ifdef CONFIG_MACH_U300_BS335
 	{
 		.type = "fwcam",
 		.addr = 0x10,
@@ -277,9 +269,6 @@ static struct i2c_board_info __initdata bus1_i2c_board_info[] = {
 		.type = "fwcam",
 		.addr = 0x5d,
 	},
-#else
-	{ },
-#endif
 };
 
 void __init u300_i2c_register_board_devices(void)

@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/pm_domain.h>
+#include <linux/pm_runtime.h>
 
 struct sh_cmt_priv {
 	void __iomem *mapbase;
@@ -48,13 +49,14 @@ struct sh_cmt_priv {
 	unsigned long next_match_value;
 	unsigned long max_match_value;
 	unsigned long rate;
-	spinlock_t lock;
+	raw_spinlock_t lock;
 	struct clock_event_device ced;
 	struct clocksource cs;
 	unsigned long total_cycles;
+	bool cs_enabled;
 };
 
-static DEFINE_SPINLOCK(sh_cmt_lock);
+static DEFINE_RAW_SPINLOCK(sh_cmt_lock);
 
 #define CMSTR -1 /* shared register */
 #define CMCSR 0 /* channel register */
@@ -139,7 +141,7 @@ static void sh_cmt_start_stop_ch(struct sh_cmt_priv *p, int start)
 	unsigned long flags, value;
 
 	/* start stop register shared by multiple timer channels */
-	spin_lock_irqsave(&sh_cmt_lock, flags);
+	raw_spin_lock_irqsave(&sh_cmt_lock, flags);
 	value = sh_cmt_read(p, CMSTR);
 
 	if (start)
@@ -148,12 +150,15 @@ static void sh_cmt_start_stop_ch(struct sh_cmt_priv *p, int start)
 		value &= ~(1 << cfg->timer_bit);
 
 	sh_cmt_write(p, CMSTR, value);
-	spin_unlock_irqrestore(&sh_cmt_lock, flags);
+	raw_spin_unlock_irqrestore(&sh_cmt_lock, flags);
 }
 
 static int sh_cmt_enable(struct sh_cmt_priv *p, unsigned long *rate)
 {
 	int k, ret;
+
+	pm_runtime_get_sync(&p->pdev->dev);
+	dev_pm_syscore_device(&p->pdev->dev, true);
 
 	/* enable clock */
 	ret = clk_enable(p->clk);
@@ -221,6 +226,9 @@ static void sh_cmt_disable(struct sh_cmt_priv *p)
 
 	/* stop clock */
 	clk_disable(p->clk);
+
+	dev_pm_syscore_device(&p->pdev->dev, false);
+	pm_runtime_put(&p->pdev->dev);
 }
 
 /* private flags */
@@ -328,9 +336,9 @@ static void sh_cmt_set_next(struct sh_cmt_priv *p, unsigned long delta)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&p->lock, flags);
+	raw_spin_lock_irqsave(&p->lock, flags);
 	__sh_cmt_set_next(p, delta);
-	spin_unlock_irqrestore(&p->lock, flags);
+	raw_spin_unlock_irqrestore(&p->lock, flags);
 }
 
 static irqreturn_t sh_cmt_interrupt(int irq, void *dev_id)
@@ -385,7 +393,7 @@ static int sh_cmt_start(struct sh_cmt_priv *p, unsigned long flag)
 	int ret = 0;
 	unsigned long flags;
 
-	spin_lock_irqsave(&p->lock, flags);
+	raw_spin_lock_irqsave(&p->lock, flags);
 
 	if (!(p->flags & (FLAG_CLOCKEVENT | FLAG_CLOCKSOURCE)))
 		ret = sh_cmt_enable(p, &p->rate);
@@ -398,7 +406,7 @@ static int sh_cmt_start(struct sh_cmt_priv *p, unsigned long flag)
 	if ((flag == FLAG_CLOCKSOURCE) && (!(p->flags & FLAG_CLOCKEVENT)))
 		__sh_cmt_set_next(p, p->max_match_value);
  out:
-	spin_unlock_irqrestore(&p->lock, flags);
+	raw_spin_unlock_irqrestore(&p->lock, flags);
 
 	return ret;
 }
@@ -408,7 +416,7 @@ static void sh_cmt_stop(struct sh_cmt_priv *p, unsigned long flag)
 	unsigned long flags;
 	unsigned long f;
 
-	spin_lock_irqsave(&p->lock, flags);
+	raw_spin_lock_irqsave(&p->lock, flags);
 
 	f = p->flags & (FLAG_CLOCKEVENT | FLAG_CLOCKSOURCE);
 	p->flags &= ~flag;
@@ -420,7 +428,7 @@ static void sh_cmt_stop(struct sh_cmt_priv *p, unsigned long flag)
 	if ((flag == FLAG_CLOCKEVENT) && (p->flags & FLAG_CLOCKSOURCE))
 		__sh_cmt_set_next(p, p->max_match_value);
 
-	spin_unlock_irqrestore(&p->lock, flags);
+	raw_spin_unlock_irqrestore(&p->lock, flags);
 }
 
 static struct sh_cmt_priv *cs_to_sh_cmt(struct clocksource *cs)
@@ -435,13 +443,13 @@ static cycle_t sh_cmt_clocksource_read(struct clocksource *cs)
 	unsigned long value;
 	int has_wrapped;
 
-	spin_lock_irqsave(&p->lock, flags);
+	raw_spin_lock_irqsave(&p->lock, flags);
 	value = p->total_cycles;
 	raw = sh_cmt_get_counter(p, &has_wrapped);
 
 	if (unlikely(has_wrapped))
 		raw += p->match_value + 1;
-	spin_unlock_irqrestore(&p->lock, flags);
+	raw_spin_unlock_irqrestore(&p->lock, flags);
 
 	return value + raw;
 }
@@ -451,22 +459,42 @@ static int sh_cmt_clocksource_enable(struct clocksource *cs)
 	int ret;
 	struct sh_cmt_priv *p = cs_to_sh_cmt(cs);
 
+	WARN_ON(p->cs_enabled);
+
 	p->total_cycles = 0;
 
 	ret = sh_cmt_start(p, FLAG_CLOCKSOURCE);
-	if (!ret)
+	if (!ret) {
 		__clocksource_updatefreq_hz(cs, p->rate);
+		p->cs_enabled = true;
+	}
 	return ret;
 }
 
 static void sh_cmt_clocksource_disable(struct clocksource *cs)
 {
-	sh_cmt_stop(cs_to_sh_cmt(cs), FLAG_CLOCKSOURCE);
+	struct sh_cmt_priv *p = cs_to_sh_cmt(cs);
+
+	WARN_ON(!p->cs_enabled);
+
+	sh_cmt_stop(p, FLAG_CLOCKSOURCE);
+	p->cs_enabled = false;
+}
+
+static void sh_cmt_clocksource_suspend(struct clocksource *cs)
+{
+	struct sh_cmt_priv *p = cs_to_sh_cmt(cs);
+
+	sh_cmt_stop(p, FLAG_CLOCKSOURCE);
+	pm_genpd_syscore_poweroff(&p->pdev->dev);
 }
 
 static void sh_cmt_clocksource_resume(struct clocksource *cs)
 {
-	sh_cmt_start(cs_to_sh_cmt(cs), FLAG_CLOCKSOURCE);
+	struct sh_cmt_priv *p = cs_to_sh_cmt(cs);
+
+	pm_genpd_syscore_poweron(&p->pdev->dev);
+	sh_cmt_start(p, FLAG_CLOCKSOURCE);
 }
 
 static int sh_cmt_register_clocksource(struct sh_cmt_priv *p,
@@ -479,7 +507,7 @@ static int sh_cmt_register_clocksource(struct sh_cmt_priv *p,
 	cs->read = sh_cmt_clocksource_read;
 	cs->enable = sh_cmt_clocksource_enable;
 	cs->disable = sh_cmt_clocksource_disable;
-	cs->suspend = sh_cmt_clocksource_disable;
+	cs->suspend = sh_cmt_clocksource_suspend;
 	cs->resume = sh_cmt_clocksource_resume;
 	cs->mask = CLOCKSOURCE_MASK(sizeof(unsigned long) * 8);
 	cs->flags = CLOCK_SOURCE_IS_CONTINUOUS;
@@ -562,6 +590,16 @@ static int sh_cmt_clock_event_next(unsigned long delta,
 	return 0;
 }
 
+static void sh_cmt_clock_event_suspend(struct clock_event_device *ced)
+{
+	pm_genpd_syscore_poweroff(&ced_to_sh_cmt(ced)->pdev->dev);
+}
+
+static void sh_cmt_clock_event_resume(struct clock_event_device *ced)
+{
+	pm_genpd_syscore_poweron(&ced_to_sh_cmt(ced)->pdev->dev);
+}
+
 static void sh_cmt_register_clockevent(struct sh_cmt_priv *p,
 				       char *name, unsigned long rating)
 {
@@ -576,6 +614,8 @@ static void sh_cmt_register_clockevent(struct sh_cmt_priv *p,
 	ced->cpumask = cpumask_of(0);
 	ced->set_next_event = sh_cmt_clock_event_next;
 	ced->set_mode = sh_cmt_clock_event_mode;
+	ced->suspend = sh_cmt_clock_event_suspend;
+	ced->resume = sh_cmt_clock_event_resume;
 
 	dev_info(&p->pdev->dev, "used for clock events\n");
 	clockevents_register_device(ced);
@@ -591,7 +631,7 @@ static int sh_cmt_register(struct sh_cmt_priv *p, char *name,
 		p->max_match_value = (1 << p->width) - 1;
 
 	p->match_value = p->max_match_value;
-	spin_lock_init(&p->lock);
+	raw_spin_lock_init(&p->lock);
 
 	if (clockevent_rating)
 		sh_cmt_register_clockevent(p, name, clockevent_rating);
@@ -670,6 +710,7 @@ static int sh_cmt_setup(struct sh_cmt_priv *p, struct platform_device *pdev)
 		dev_err(&p->pdev->dev, "registration failed\n");
 		goto err1;
 	}
+	p->cs_enabled = false;
 
 	ret = setup_irq(irq, &p->irqaction);
 	if (ret) {
@@ -688,14 +729,17 @@ err0:
 static int __devinit sh_cmt_probe(struct platform_device *pdev)
 {
 	struct sh_cmt_priv *p = platform_get_drvdata(pdev);
+	struct sh_timer_config *cfg = pdev->dev.platform_data;
 	int ret;
 
-	if (!is_early_platform_device(pdev))
-		pm_genpd_dev_always_on(&pdev->dev, true);
+	if (!is_early_platform_device(pdev)) {
+		pm_runtime_set_active(&pdev->dev);
+		pm_runtime_enable(&pdev->dev);
+	}
 
 	if (p) {
 		dev_info(&pdev->dev, "kept as earlytimer\n");
-		return 0;
+		goto out;
 	}
 
 	p = kmalloc(sizeof(*p), GFP_KERNEL);
@@ -708,8 +752,19 @@ static int __devinit sh_cmt_probe(struct platform_device *pdev)
 	if (ret) {
 		kfree(p);
 		platform_set_drvdata(pdev, NULL);
+		pm_runtime_idle(&pdev->dev);
+		return ret;
 	}
-	return ret;
+	if (is_early_platform_device(pdev))
+		return 0;
+
+ out:
+	if (cfg->clockevent_rating || cfg->clocksource_rating)
+		pm_runtime_irq_safe(&pdev->dev);
+	else
+		pm_runtime_idle(&pdev->dev);
+
+	return 0;
 }
 
 static int __devexit sh_cmt_remove(struct platform_device *pdev)

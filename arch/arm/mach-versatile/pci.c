@@ -173,7 +173,7 @@ static struct resource io_mem = {
 	.name	= "PCI I/O space",
 	.start	= VERSATILE_PCI_MEM_BASE0,
 	.end	= VERSATILE_PCI_MEM_BASE0+VERSATILE_PCI_MEM_BASE0_SIZE-1,
-	.flags	= IORESOURCE_IO,
+	.flags	= IORESOURCE_MEM,
 };
 
 static struct resource non_mem = {
@@ -214,11 +214,9 @@ static int __init pci_versatile_setup_resources(struct pci_sys_data *sys)
 	}
 
 	/*
-	 * the IO resource for this bus
 	 * the mem resource for this bus
 	 * the prefetch mem resource for this bus
 	 */
-	pci_add_resource_offset(&sys->resources, &io_mem, sys->io_offset);
 	pci_add_resource_offset(&sys->resources, &non_mem, sys->mem_offset);
 	pci_add_resource_offset(&sys->resources, &pre_mem, sys->mem_offset);
 
@@ -247,8 +245,11 @@ int __init pci_versatile_setup(int nr, struct pci_sys_data *sys)
 		goto out;
 	}
 
+	ret = pci_ioremap_io(0, VERSATILE_PCI_MEM_BASE0);
+	if (ret)
+		goto out;
+
 	if (nr == 0) {
-		sys->mem_offset = 0;
 		ret = pci_versatile_setup_resources(sys);
 		if (ret < 0) {
 			printk("pci_versatile_setup: resources... oops?\n");
@@ -303,15 +304,8 @@ int __init pci_versatile_setup(int nr, struct pci_sys_data *sys)
 }
 
 
-struct pci_bus * __init pci_versatile_scan_bus(int nr, struct pci_sys_data *sys)
-{
-	return pci_scan_root_bus(NULL, sys->busnr, &pci_versatile_ops, sys,
-				 &sys->resources);
-}
-
 void __init pci_versatile_preinit(void)
 {
-	pcibios_min_io = 0x44000000;
 	pcibios_min_mem = 0x50000000;
 
 	__raw_writel(VERSATILE_PCI_MEM_BASE0 >> 28, PCI_IMAP0);
@@ -331,7 +325,6 @@ void __init pci_versatile_preinit(void)
 static int __init versatile_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	int irq;
-	int devslot = PCI_SLOT(dev->devfn);
 
 	/* slot,  pin,	irq
 	 *  24     1     27
@@ -339,19 +332,16 @@ static int __init versatile_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 	 *  26     1     29
 	 *  27     1     30
 	 */
-	irq = 27 + ((slot + pin - 1) & 3);
-
-	printk("PCI map irq: slot %d, pin %d, devslot %d, irq: %d\n",slot,pin,devslot,irq);
+	irq = 27 + ((slot - 24 + pin - 1) & 3);
 
 	return irq;
 }
 
 static struct hw_pci versatile_pci __initdata = {
-	.swizzle		= NULL,
 	.map_irq		= versatile_map_irq,
 	.nr_controllers		= 1,
+	.ops			= &pci_versatile_ops,
 	.setup			= pci_versatile_setup,
-	.scan			= pci_versatile_scan_bus,
 	.preinit		= pci_versatile_preinit,
 };
 

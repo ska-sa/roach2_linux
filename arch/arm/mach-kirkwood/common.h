@@ -50,12 +50,66 @@ void kirkwood_nand_init(struct mtd_partition *parts, int nr_parts, int delay);
 void kirkwood_nand_init_rnb(struct mtd_partition *parts, int nr_parts, int (*dev_ready)(struct mtd_info *));
 void kirkwood_audio_init(void);
 void kirkwood_restart(char, const char *);
+void kirkwood_clk_init(void);
 
 /* board init functions for boards not fully converted to fdt */
 #ifdef CONFIG_MACH_DREAMPLUG_DT
 void dreamplug_init(void);
 #else
 static inline void dreamplug_init(void) {};
+#endif
+#ifdef CONFIG_MACH_TS219_DT
+void qnap_dt_ts219_init(void);
+#else
+static inline void qnap_dt_ts219_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_DLINK_KIRKWOOD_DT
+void dnskw_init(void);
+#else
+static inline void dnskw_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_ICONNECT_DT
+void iconnect_init(void);
+#else
+static inline void iconnect_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_IB62X0_DT
+void ib62x0_init(void);
+#else
+static inline void ib62x0_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_DOCKSTAR_DT
+void dockstar_dt_init(void);
+#else
+static inline void dockstar_dt_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_GOFLEXNET_DT
+void goflexnet_init(void);
+#else
+static inline void goflexnet_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_LSXL_DT
+void lsxl_init(void);
+#else
+static inline void lsxl_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_IOMEGA_IX2_200_DT
+void iomega_ix2_200_init(void);
+#else
+static inline void iomega_ix2_200_init(void) {};
+#endif
+
+#ifdef CONFIG_MACH_KM_KIRKWOOD_DT
+void km_kirkwood_init(void);
+#else
+static inline void km_kirkwood_init(void) {};
 #endif
 
 /* early init functions not converted to fdt yet */

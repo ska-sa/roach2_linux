@@ -25,8 +25,6 @@
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
 
-static bool debug;
-
 static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x1934, 0x0706) },
 	{ }					/* Terminating entry */
@@ -68,8 +66,6 @@ static void f81232_read_int_callback(struct urb *urb)
 	int status = urb->status;
 	int retval;
 
-	dbg("%s (%d)", __func__, port->number);
-
 	switch (status) {
 	case 0:
 		/* success */
@@ -78,16 +74,16 @@ static void f81232_read_int_callback(struct urb *urb)
 	case -ENOENT:
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
-		dbg("%s - urb shutting down with status: %d", __func__,
-		    status);
+		dev_dbg(&port->dev, "%s - urb shutting down with status: %d\n",
+			__func__, status);
 		return;
 	default:
-		dbg("%s - nonzero urb status received: %d", __func__,
-		    status);
+		dev_dbg(&port->dev, "%s - nonzero urb status received: %d\n",
+			__func__, status);
 		goto exit;
 	}
 
-	usb_serial_debug_data(debug, &port->dev, __func__,
+	usb_serial_debug_data(&port->dev, __func__,
 			      urb->actual_length, urb->transfer_buffer);
 
 	f81232_update_line_status(port, data, actual_length);
@@ -133,7 +129,7 @@ static void f81232_process_read_urb(struct urb *urb)
 		tty_flag = TTY_PARITY;
 	else if (line_status & UART_FRAME_ERROR)
 		tty_flag = TTY_FRAME;
-	dbg("%s - tty_flag = %d", __func__, tty_flag);
+	dev_dbg(&port->dev, "%s - tty_flag = %d\n", __func__, tty_flag);
 
 	/* overrun is special, not associated with a char */
 	if (line_status & UART_OVERRUN_ERROR)
@@ -175,10 +171,11 @@ static void f81232_set_termios(struct tty_struct *tty,
 	/* FIXME - Stubbed out for now */
 
 	/* Don't change anything if nothing has changed */
-	if (!tty_termios_hw_change(tty->termios, old_termios))
+	if (!tty_termios_hw_change(&tty->termios, old_termios))
 		return;
 
 	/* Do the real work here... */
+	tty_termios_copy_hw(&tty->termios, old_termios);
 }
 
 static int f81232_tiocmget(struct tty_struct *tty)
@@ -203,7 +200,6 @@ static int f81232_open(struct tty_struct *tty, struct usb_serial_port *port)
 	if (tty)
 		f81232_set_termios(tty, port, &tmp_termios);
 
-	dbg("%s - submitting interrupt urb", __func__);
 	result = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 	if (result) {
 		dev_err(&port->dev, "%s - failed submitting interrupt urb,"
@@ -293,7 +289,9 @@ static int f81232_ioctl(struct tty_struct *tty,
 {
 	struct serial_struct ser;
 	struct usb_serial_port *port = tty->driver_data;
-	dbg("%s (%d) cmd = 0x%04x", __func__, port->number, cmd);
+
+	dev_dbg(&port->dev, "%s (%d) cmd = 0x%04x\n", __func__,
+		port->number, cmd);
 
 	switch (cmd) {
 	case TIOCGSERIAL:
@@ -309,60 +307,42 @@ static int f81232_ioctl(struct tty_struct *tty,
 		return 0;
 
 	case TIOCMIWAIT:
-		dbg("%s (%d) TIOCMIWAIT", __func__,  port->number);
+		dev_dbg(&port->dev, "%s (%d) TIOCMIWAIT\n", __func__,
+			port->number);
 		return wait_modem_info(port, arg);
 	default:
-		dbg("%s not supported = 0x%04x", __func__, cmd);
+		dev_dbg(&port->dev, "%s not supported = 0x%04x\n",
+			__func__, cmd);
 		break;
 	}
 	return -ENOIOCTLCMD;
 }
 
-static int f81232_startup(struct usb_serial *serial)
+static int f81232_port_probe(struct usb_serial_port *port)
 {
 	struct f81232_private *priv;
-	int i;
 
-	for (i = 0; i < serial->num_ports; ++i) {
-		priv = kzalloc(sizeof(struct f81232_private), GFP_KERNEL);
-		if (!priv)
-			goto cleanup;
-		spin_lock_init(&priv->lock);
-		init_waitqueue_head(&priv->delta_msr_wait);
-		usb_set_serial_port_data(serial->port[i], priv);
-	}
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	spin_lock_init(&priv->lock);
+	init_waitqueue_head(&priv->delta_msr_wait);
+
+	usb_set_serial_port_data(port, priv);
+
 	return 0;
-
-cleanup:
-	for (--i; i >= 0; --i) {
-		priv = usb_get_serial_port_data(serial->port[i]);
-		kfree(priv);
-		usb_set_serial_port_data(serial->port[i], NULL);
-	}
-	return -ENOMEM;
 }
 
-static void f81232_release(struct usb_serial *serial)
+static int f81232_port_remove(struct usb_serial_port *port)
 {
-	int i;
 	struct f81232_private *priv;
 
-	for (i = 0; i < serial->num_ports; ++i) {
-		priv = usb_get_serial_port_data(serial->port[i]);
-		kfree(priv);
-	}
-}
+	priv = usb_get_serial_port_data(port);
+	kfree(priv);
 
-static struct usb_driver f81232_driver = {
-	.name =		"f81232",
-	.probe =	usb_serial_probe,
-	.disconnect =	usb_serial_disconnect,
-	.id_table =	id_table,
-	.suspend =      usb_serial_suspend,
-	.resume =       usb_serial_resume,
-	.no_dynamic_id = 	1,
-	.supports_autosuspend =	1,
-};
+	return 0;
+}
 
 static struct usb_serial_driver f81232_device = {
 	.driver = {
@@ -370,7 +350,6 @@ static struct usb_serial_driver f81232_device = {
 		.name =		"f81232",
 	},
 	.id_table =		id_table,
-	.usb_driver = 		&f81232_driver,
 	.num_ports =		1,
 	.bulk_in_size =		256,
 	.bulk_out_size =	256,
@@ -385,8 +364,8 @@ static struct usb_serial_driver f81232_device = {
 	.tiocmset =		f81232_tiocmset,
 	.process_read_urb =	f81232_process_read_urb,
 	.read_int_callback =	f81232_read_int_callback,
-	.attach =		f81232_startup,
-	.release =		f81232_release,
+	.port_probe =		f81232_port_probe,
+	.port_remove =		f81232_port_remove,
 };
 
 static struct usb_serial_driver * const serial_drivers[] = {
@@ -394,12 +373,8 @@ static struct usb_serial_driver * const serial_drivers[] = {
 	NULL,
 };
 
-module_usb_serial_driver(f81232_driver, serial_drivers);
+module_usb_serial_driver(serial_drivers, id_table);
 
 MODULE_DESCRIPTION("Fintek F81232 USB to serial adaptor driver");
 MODULE_AUTHOR("Greg Kroah-Hartman <gregkh@linuxfoundation.org");
 MODULE_LICENSE("GPL v2");
-
-module_param(debug, bool, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(debug, "Debug enabled or not");
-

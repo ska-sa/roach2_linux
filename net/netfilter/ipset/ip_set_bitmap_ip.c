@@ -27,9 +27,12 @@
 #define IP_SET_BITMAP_TIMEOUT
 #include <linux/netfilter/ipset/ip_set_timeout.h>
 
+#define REVISION_MIN	0
+#define REVISION_MAX	0
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jozsef Kadlecsik <kadlec@blackhole.kfki.hu>");
-MODULE_DESCRIPTION("bitmap:ip type of IP sets");
+IP_SET_MODULE_DESC("bitmap:ip", REVISION_MIN, REVISION_MAX);
 MODULE_ALIAS("ip_set_bitmap:ip");
 
 /* Type structure */
@@ -109,8 +112,9 @@ bitmap_ip_list(const struct ip_set *set,
 			} else
 				goto nla_put_failure;
 		}
-		NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP,
-				htonl(map->first_ip + id * map->hosts));
+		if (nla_put_ipaddr4(skb, IPSET_ATTR_IP,
+				    htonl(map->first_ip + id * map->hosts)))
+			goto nla_put_failure;
 		ipset_nest_end(skb, nested);
 	}
 	ipset_nest_end(skb, atd);
@@ -194,10 +198,11 @@ bitmap_ip_tlist(const struct ip_set *set,
 			} else
 				goto nla_put_failure;
 		}
-		NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP,
-				htonl(map->first_ip + id * map->hosts));
-		NLA_PUT_NET32(skb, IPSET_ATTR_TIMEOUT,
-			      htonl(ip_set_timeout_get(members[id])));
+		if (nla_put_ipaddr4(skb, IPSET_ATTR_IP,
+				    htonl(map->first_ip + id * map->hosts)) ||
+		    nla_put_net32(skb, IPSET_ATTR_TIMEOUT,
+				  htonl(ip_set_timeout_get(members[id]))))
+			goto nla_put_failure;
 		ipset_nest_end(skb, nested);
 	}
 	ipset_nest_end(skb, adt);
@@ -282,7 +287,7 @@ bitmap_ip_uadt(struct ip_set *set, struct nlattr *tb[],
 	} else if (tb[IPSET_ATTR_CIDR]) {
 		u8 cidr = nla_get_u8(tb[IPSET_ATTR_CIDR]);
 
-		if (cidr > 32)
+		if (!cidr || cidr > 32)
 			return -IPSET_ERR_INVALID_CIDR;
 		ip_set_mask_from_to(ip, ip_to, cidr);
 	} else
@@ -334,15 +339,16 @@ bitmap_ip_head(struct ip_set *set, struct sk_buff *skb)
 	nested = ipset_nest_start(skb, IPSET_ATTR_DATA);
 	if (!nested)
 		goto nla_put_failure;
-	NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP, htonl(map->first_ip));
-	NLA_PUT_IPADDR4(skb, IPSET_ATTR_IP_TO, htonl(map->last_ip));
-	if (map->netmask != 32)
-		NLA_PUT_U8(skb, IPSET_ATTR_NETMASK, map->netmask);
-	NLA_PUT_NET32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref - 1));
-	NLA_PUT_NET32(skb, IPSET_ATTR_MEMSIZE,
-		      htonl(sizeof(*map) + map->memsize));
-	if (with_timeout(map->timeout))
-		NLA_PUT_NET32(skb, IPSET_ATTR_TIMEOUT, htonl(map->timeout));
+	if (nla_put_ipaddr4(skb, IPSET_ATTR_IP, htonl(map->first_ip)) ||
+	    nla_put_ipaddr4(skb, IPSET_ATTR_IP_TO, htonl(map->last_ip)) ||
+	    (map->netmask != 32 &&
+	     nla_put_u8(skb, IPSET_ATTR_NETMASK, map->netmask)) ||
+	    nla_put_net32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref - 1)) ||
+	    nla_put_net32(skb, IPSET_ATTR_MEMSIZE,
+			  htonl(sizeof(*map) + map->memsize)) ||
+	    (with_timeout(map->timeout) &&
+	     nla_put_net32(skb, IPSET_ATTR_TIMEOUT, htonl(map->timeout))))
+		goto nla_put_failure;
 	ipset_nest_end(skb, nested);
 
 	return 0;
@@ -451,7 +457,8 @@ static int
 bitmap_ip_create(struct ip_set *set, struct nlattr *tb[], u32 flags)
 {
 	struct bitmap_ip *map;
-	u32 first_ip, last_ip, hosts, elements;
+	u32 first_ip, last_ip, hosts;
+	u64 elements;
 	u8 netmask = 32;
 	int ret;
 
@@ -494,7 +501,7 @@ bitmap_ip_create(struct ip_set *set, struct nlattr *tb[], u32 flags)
 
 	if (netmask == 32) {
 		hosts = 1;
-		elements = last_ip - first_ip + 1;
+		elements = (u64)last_ip - first_ip + 1;
 	} else {
 		u8 mask_bits;
 		u32 mask;
@@ -512,7 +519,8 @@ bitmap_ip_create(struct ip_set *set, struct nlattr *tb[], u32 flags)
 	if (elements > IPSET_BITMAP_MAX_RANGE + 1)
 		return -IPSET_ERR_BITMAP_RANGE_SIZE;
 
-	pr_debug("hosts %u, elements %u\n", hosts, elements);
+	pr_debug("hosts %u, elements %llu\n",
+		 hosts, (unsigned long long)elements);
 
 	map = kzalloc(sizeof(*map), GFP_KERNEL);
 	if (!map)
@@ -551,8 +559,8 @@ static struct ip_set_type bitmap_ip_type __read_mostly = {
 	.features	= IPSET_TYPE_IP,
 	.dimension	= IPSET_DIM_ONE,
 	.family		= NFPROTO_IPV4,
-	.revision_min	= 0,
-	.revision_max	= 0,
+	.revision_min	= REVISION_MIN,
+	.revision_max	= REVISION_MAX,
 	.create		= bitmap_ip_create,
 	.create_policy	= {
 		[IPSET_ATTR_IP]		= { .type = NLA_NESTED },

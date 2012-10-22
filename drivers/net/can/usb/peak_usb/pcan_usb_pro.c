@@ -292,8 +292,8 @@ static int pcan_usb_pro_wait_rsp(struct peak_usb_device *dev,
 			if (!rec_len) {
 				netdev_err(dev->netdev,
 					   "got unprocessed record in msg\n");
-				dump_mem("rcvd rsp msg", pum->u.rec_buffer,
-					 actual_length);
+				pcan_dump_mem("rcvd rsp msg", pum->u.rec_buffer,
+					      actual_length);
 				break;
 			}
 
@@ -756,8 +756,8 @@ static int pcan_usb_pro_decode_buf(struct peak_usb_device *dev, struct urb *urb)
 
 fail:
 	if (err)
-		dump_mem("received msg",
-			 urb->transfer_buffer, urb->actual_length);
+		pcan_dump_mem("received msg",
+			      urb->transfer_buffer, urb->actual_length);
 
 	return err;
 }
@@ -875,6 +875,7 @@ static int pcan_usb_pro_init(struct peak_usb_device *dev)
 					    PCAN_USBPRO_INFO_FW,
 					    &fi, sizeof(fi));
 		if (err) {
+			kfree(usb_if);
 			dev_err(dev->netdev->dev.parent,
 				"unable to read %s firmware info (err %d)\n",
 				pcan_usb_pro.name, err);
@@ -885,6 +886,7 @@ static int pcan_usb_pro_init(struct peak_usb_device *dev)
 					    PCAN_USBPRO_INFO_BL,
 					    &bi, sizeof(bi));
 		if (err) {
+			kfree(usb_if);
 			dev_err(dev->netdev->dev.parent,
 				"unable to read %s bootloader info (err %d)\n",
 				pcan_usb_pro.name, err);

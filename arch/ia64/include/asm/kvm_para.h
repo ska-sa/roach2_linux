@@ -1,6 +1,3 @@
-#ifndef __IA64_KVM_PARA_H
-#define __IA64_KVM_PARA_H
-
 /*
  * Copyright (C) 2007 Xiantao Zhang <xiantao.zhang@intel.com>
  *
@@ -18,14 +15,20 @@
  * Place - Suite 330, Boston, MA 02111-1307 USA.
  *
  */
+#ifndef __IA64_KVM_PARA_H
+#define __IA64_KVM_PARA_H
 
-#ifdef __KERNEL__
+#include <uapi/asm/kvm_para.h>
+
 
 static inline unsigned int kvm_arch_para_features(void)
 {
 	return 0;
 }
 
-#endif
+static inline bool kvm_check_and_clear_guest_paused(void)
+{
+	return false;
+}
 
 #endif

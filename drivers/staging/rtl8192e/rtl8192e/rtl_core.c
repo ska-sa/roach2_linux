@@ -734,8 +734,7 @@ static void rtl8192_prepare_beacon(struct r8192_priv *priv)
 
 	ring = &priv->tx_ring[BEACON_QUEUE];
 	pskb = __skb_dequeue(&ring->queue);
-	if (pskb)
-		kfree_skb(pskb);
+	kfree_skb(pskb);
 
 	pnewskb = rtllib_get_beacon(priv->rtllib);
 	if (!pnewskb)
@@ -1025,7 +1024,7 @@ static int rtl8192_sta_down(struct net_device *dev, bool shutdownrf)
 			break;
 		}
 		RT_TRACE(COMP_DBG, "===>%s():RF is in progress, need to wait "
-			 "until rf chang is done.\n", __func__);
+			 "until rf change is done.\n", __func__);
 		mdelay(1);
 		RFInProgressTimeOut++;
 		spin_lock_irqsave(&priv->rf_ps_lock, flags);
@@ -1211,7 +1210,7 @@ static void rtl8192_init_priv_variable(struct net_device *dev)
 	priv->AcmControl = 0;
 	priv->pFirmware = vzalloc(sizeof(struct rt_firmware));
 	if (!priv->pFirmware)
-		printk(KERN_ERR "rtl8193e: Unable to allocate space "
+		printk(KERN_ERR "rtl8192e: Unable to allocate space "
 		       "for firmware\n");
 
 	skb_queue_head_init(&priv->rx_queue);
@@ -2024,10 +2023,10 @@ short rtl8192_tx(struct net_device *dev, struct sk_buff *skb)
 	stype = WLAN_FC_GET_STYPE(fc);
 	pda_addr = header->addr1;
 
-	if (is_multicast_ether_addr(pda_addr))
-		multi_addr = true;
-	else if (is_broadcast_ether_addr(pda_addr))
+	if (is_broadcast_ether_addr(pda_addr))
 		broad_addr = true;
+	else if (is_multicast_ether_addr(pda_addr))
+		multi_addr = true;
 	else
 		uni_addr = true;
 
@@ -2358,8 +2357,7 @@ static void rtl8192_rx_normal(struct net_device *dev)
 				stats.RxBufShift);
 			skb_trim(skb, skb->len - 4/*sCrcLng*/);
 			rtllib_hdr = (struct rtllib_hdr_1addr *)skb->data;
-			if (!is_broadcast_ether_addr(rtllib_hdr->addr1) &&
-			!is_multicast_ether_addr(rtllib_hdr->addr1)) {
+			if (!is_multicast_ether_addr(rtllib_hdr->addr1)) {
 				/* unicast packet */
 				unicast_packet = true;
 			}
@@ -3126,6 +3124,9 @@ MODULE_DESCRIPTION("Linux driver for Realtek RTL819x WiFi cards");
 MODULE_AUTHOR(DRV_COPYRIGHT " " DRV_AUTHOR);
 MODULE_VERSION(DRV_VERSION);
 MODULE_LICENSE("GPL");
+MODULE_FIRMWARE(RTL8192E_BOOT_IMG_FW);
+MODULE_FIRMWARE(RTL8192E_MAIN_IMG_FW);
+MODULE_FIRMWARE(RTL8192E_DATA_IMG_FW);
 
 module_param(ifname, charp, S_IRUGO|S_IWUSR);
 module_param(hwwep, int, S_IRUGO|S_IWUSR);

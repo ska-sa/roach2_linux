@@ -76,7 +76,7 @@ static int __init cpu_win_can_remap(const struct orion_addr_map_cfg *cfg,
 /*
  * Description of the windows needed by the platform code
  */
-static struct __initdata orion_addr_map_cfg addr_map_cfg = {
+static struct orion_addr_map_cfg addr_map_cfg __initdata = {
 	.num_wins = 8,
 	.cpu_win_can_remap = cpu_win_can_remap,
 	.bridge_virt_base = ORION5X_BRIDGE_VIRT_BASE,
@@ -113,7 +113,8 @@ void __init orion5x_setup_cpu_mbus_bridge(void)
 	/*
 	 * Setup MBUS dram target info.
 	 */
-	orion_setup_cpu_mbus_target(&addr_map_cfg, ORION5X_DDR_WINDOW_CPU_BASE);
+	orion_setup_cpu_mbus_target(&addr_map_cfg,
+				    (void __iomem *) ORION5X_DDR_WINDOW_CPU_BASE);
 }
 
 void __init orion5x_setup_dev_boot_win(u32 base, u32 size)

@@ -42,8 +42,7 @@ ip6t_mangle_out(struct sk_buff *skb, const struct net_device *out)
 	/* root is playing with raw sockets. */
 	if (skb->len < sizeof(struct iphdr) ||
 	    ip_hdrlen(skb) < sizeof(struct iphdr)) {
-		if (net_ratelimit())
-			pr_warning("ip6t_hook: happy cracking.\n");
+		net_warn_ratelimited("ip6t_hook: happy cracking\n");
 		return NF_ACCEPT;
 	}
 #endif
@@ -98,9 +97,7 @@ static int __net_init ip6table_mangle_net_init(struct net *net)
 	net->ipv6.ip6table_mangle =
 		ip6t_register_table(net, &packet_mangler, repl);
 	kfree(repl);
-	if (IS_ERR(net->ipv6.ip6table_mangle))
-		return PTR_ERR(net->ipv6.ip6table_mangle);
-	return 0;
+	return PTR_RET(net->ipv6.ip6table_mangle);
 }
 
 static void __net_exit ip6table_mangle_net_exit(struct net *net)

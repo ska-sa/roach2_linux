@@ -25,7 +25,6 @@
 #include <linux/timer.h>
 #include <linux/irq.h>
 
-#include <asm/leds.h>
 #include <asm/thread_info.h>
 #include <asm/sched_clock.h>
 #include <asm/stacktrace.h>
@@ -80,21 +79,6 @@ u32 arch_gettimeoffset(void)
 }
 #endif /* CONFIG_ARCH_USES_GETTIMEOFFSET */
 
-#ifdef CONFIG_LEDS_TIMER
-static inline void do_leds(void)
-{
-	static unsigned int count = HZ/2;
-
-	if (--count == 0) {
-		count = HZ/2;
-		leds_event(led_timer);
-	}
-}
-#else
-#define	do_leds()
-#endif
-
-
 #ifndef CONFIG_GENERIC_CLOCKEVENTS
 /*
  * Kernel system timer support.
@@ -102,13 +86,48 @@ static inline void do_leds(void)
 void timer_tick(void)
 {
 	profile_tick(CPU_PROFILING);
-	do_leds();
 	xtime_update(1);
 #ifndef CONFIG_SMP
 	update_process_times(user_mode(get_irq_regs()));
 #endif
 }
 #endif
+
+static void dummy_clock_access(struct timespec *ts)
+{
+	ts->tv_sec = 0;
+	ts->tv_nsec = 0;
+}
+
+static clock_access_fn __read_persistent_clock = dummy_clock_access;
+static clock_access_fn __read_boot_clock = dummy_clock_access;;
+
+void read_persistent_clock(struct timespec *ts)
+{
+	__read_persistent_clock(ts);
+}
+
+void read_boot_clock(struct timespec *ts)
+{
+	__read_boot_clock(ts);
+}
+
+int __init register_persistent_clock(clock_access_fn read_boot,
+				     clock_access_fn read_persistent)
+{
+	/* Only allow the clockaccess functions to be registered once */
+	if (__read_persistent_clock == dummy_clock_access &&
+	    __read_boot_clock == dummy_clock_access) {
+		if (read_boot)
+			__read_boot_clock = read_boot;
+		if (read_persistent)
+			__read_persistent_clock = read_persistent;
+
+		return 0;
+	}
+
+	return -EINVAL;
+}
 
 #if defined(CONFIG_PM) && !defined(CONFIG_GENERIC_CLOCKEVENTS)
 static int timer_suspend(void)

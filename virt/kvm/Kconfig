@@ -18,3 +18,9 @@ config KVM_MMIO
 
 config KVM_ASYNC_PF
        bool
+
+config HAVE_KVM_MSI
+       bool
+
+config HAVE_KVM_CPU_RELAX_INTERCEPT
+       bool

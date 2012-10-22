@@ -62,8 +62,6 @@
 #define D40_SREG_ELEM_LOG_LIDX_MASK	(0xFF << D40_SREG_ELEM_LOG_LIDX_POS)
 
 /* Link register */
-#define D40_DEACTIVATE_EVENTLINE	0x0
-#define D40_ACTIVATE_EVENTLINE		0x1
 #define D40_EVENTLINE_POS(i)		(2 * i)
 #define D40_EVENTLINE_MASK(i)		(0x3 << D40_EVENTLINE_POS(i))
 
@@ -204,7 +202,7 @@
 /* LLI related structures */
 
 /**
- * struct d40_phy_lli - The basic configration register for each physical
+ * struct d40_phy_lli - The basic configuration register for each physical
  * channel.
  *
  * @reg_cfg: The configuration register.

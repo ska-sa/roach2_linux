@@ -20,10 +20,13 @@
  * MA 02110-1301, USA.
  */
 
+#include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/clockchips.h>
 #include <linux/clk.h>
+#include <linux/of.h>
+#include <linux/of_irq.h>
 
 #include <asm/mach/time.h>
 #include <mach/mxs.h>
@@ -243,8 +246,24 @@ static int __init mxs_clocksource_init(struct clk *timer_clk)
 	return 0;
 }
 
-void __init mxs_timer_init(struct clk *timer_clk, int irq)
+void __init mxs_timer_init(void)
 {
+	struct device_node *np;
+	struct clk *timer_clk;
+	int irq;
+
+	np = of_find_compatible_node(NULL, NULL, "fsl,timrot");
+	if (!np) {
+		pr_err("%s: failed find timrot node\n", __func__);
+		return;
+	}
+
+	timer_clk = clk_get_sys("timrot", NULL);
+	if (IS_ERR(timer_clk)) {
+		pr_err("%s: failed to get clk\n", __func__);
+		return;
+	}
+
 	clk_prepare_enable(timer_clk);
 
 	/*
@@ -286,5 +305,6 @@ void __init mxs_timer_init(struct clk *timer_clk, int irq)
 	mxs_clockevent_init(timer_clk);
 
 	/* Make irqs happen */
+	irq = irq_of_parse_and_map(np, 0);
 	setup_irq(irq, &mxs_timer_irq);
 }

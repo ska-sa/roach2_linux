@@ -583,12 +583,14 @@ static int __devinit peak_pci_probe(struct pci_dev *pdev,
 	cfg_base = pci_iomap(pdev, 0, PEAK_PCI_CFG_SIZE);
 	if (!cfg_base) {
 		dev_err(&pdev->dev, "failed to map PCI resource #0\n");
+		err = -ENOMEM;
 		goto failure_release_regions;
 	}
 
 	reg_base = pci_iomap(pdev, 1, PEAK_PCI_CHAN_SIZE * channels);
 	if (!reg_base) {
 		dev_err(&pdev->dev, "failed to map PCI resource #1\n");
+		err = -ENOMEM;
 		goto failure_unmap_cfg_base;
 	}
 
@@ -749,14 +751,4 @@ static struct pci_driver peak_pci_driver = {
 	.remove = __devexit_p(peak_pci_remove),
 };
 
-static int __init peak_pci_init(void)
-{
-	return pci_register_driver(&peak_pci_driver);
-}
-module_init(peak_pci_init);
-
-static void __exit peak_pci_exit(void)
-{
-	pci_unregister_driver(&peak_pci_driver);
-}
-module_exit(peak_pci_exit);
+module_pci_driver(peak_pci_driver);

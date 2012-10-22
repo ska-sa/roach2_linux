@@ -227,7 +227,7 @@ static uint16_t mio_cs_win_in(struct comedi_device *dev, int addr)
 
 static int mio_cs_attach(struct comedi_device *dev,
 			 struct comedi_devconfig *it);
-static int mio_cs_detach(struct comedi_device *dev);
+static void mio_cs_detach(struct comedi_device *dev);
 static struct comedi_driver driver_ni_mio_cs = {
 	.driver_name = "ni_mio_cs",
 	.module = THIS_MODULE,
@@ -240,18 +240,11 @@ static struct comedi_driver driver_ni_mio_cs = {
 static int ni_getboardtype(struct comedi_device *dev,
 			   struct pcmcia_device *link);
 
-/* clean up allocated resources */
-/* called when driver is removed */
-static int mio_cs_detach(struct comedi_device *dev)
+static void mio_cs_detach(struct comedi_device *dev)
 {
 	mio_common_detach(dev);
-
-	/* PCMCIA layer frees the IO region */
-
 	if (dev->irq)
 		free_irq(dev->irq, dev);
-
-	return 0;
 }
 
 static void mio_cs_config(struct pcmcia_device *link);
@@ -276,8 +269,6 @@ static void cs_release(struct pcmcia_device *link)
 
 static void cs_detach(struct pcmcia_device *link)
 {
-	DPRINTK("cs_detach(link=%p)\n", link);
-
 	cs_release(link);
 }
 
@@ -391,7 +382,7 @@ static int mio_cs_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	devpriv->stc_writel = &win_out2;
 	devpriv->stc_readl = &win_in2;
 
-	ret = ni_E_init(dev, it);
+	ret = ni_E_init(dev);
 
 	if (ret < 0)
 		return ret;
@@ -430,7 +421,7 @@ MODULE_AUTHOR("David A. Schleef <ds@schleef.org>");
 MODULE_DESCRIPTION("Comedi driver for National Instruments DAQCard E series");
 MODULE_LICENSE("GPL");
 
-struct pcmcia_driver ni_mio_cs_driver = {
+static struct pcmcia_driver ni_mio_cs_driver = {
 	.probe = &cs_attach,
 	.remove = &cs_detach,
 	.suspend = &mio_cs_suspend,

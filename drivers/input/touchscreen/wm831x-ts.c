@@ -221,7 +221,7 @@ static void wm831x_ts_input_close(struct input_dev *idev)
 	synchronize_irq(wm831x_ts->pd_irq);
 
 	/* Make sure the IRQ completion work is quiesced */
-	flush_work_sync(&wm831x_ts->pd_data_work);
+	flush_work(&wm831x_ts->pd_data_work);
 
 	/* If we ended up with the pen down then make sure we revert back
 	 * to pen detection state for the next time we start up.
@@ -260,15 +260,16 @@ static __devinit int wm831x_ts_probe(struct platform_device *pdev)
 	 * If we have a direct IRQ use it, otherwise use the interrupt
 	 * from the WM831x IRQ controller.
 	 */
+	wm831x_ts->data_irq = wm831x_irq(wm831x,
+					 platform_get_irq_byname(pdev,
+								 "TCHDATA"));
 	if (pdata && pdata->data_irq)
 		wm831x_ts->data_irq = pdata->data_irq;
-	else
-		wm831x_ts->data_irq = platform_get_irq_byname(pdev, "TCHDATA");
 
+	wm831x_ts->pd_irq = wm831x_irq(wm831x,
+				       platform_get_irq_byname(pdev, "TCHPD"));
 	if (pdata && pdata->pd_irq)
 		wm831x_ts->pd_irq = pdata->pd_irq;
-	else
-		wm831x_ts->pd_irq = platform_get_irq_byname(pdev, "TCHPD");
 
 	if (pdata)
 		wm831x_ts->pressure = pdata->pressure;

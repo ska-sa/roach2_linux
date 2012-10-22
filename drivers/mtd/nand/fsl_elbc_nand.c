@@ -75,6 +75,7 @@ struct fsl_elbc_fcm_ctrl {
 	unsigned int use_mdr;    /* Non zero if the MDR is to be set      */
 	unsigned int oob;        /* Non zero if operating on OOB data     */
 	unsigned int counter;	 /* counter for the initializations	  */
+	unsigned int max_bitflips;  /* Saved during READ0 cmd		  */
 };
 
 /* These map to the positions used by the FCM hardware ECC generator */
@@ -253,6 +254,8 @@ static int fsl_elbc_run_command(struct mtd_info *mtd)
 	if (chip->ecc.mode != NAND_ECC_HW)
 		return 0;
 
+	elbc_fcm_ctrl->max_bitflips = 0;
+
 	if (elbc_fcm_ctrl->read_bytes == mtd->writesize + mtd->oobsize) {
 		uint32_t lteccr = in_be32(&lbc->lteccr);
 		/*
@@ -262,11 +265,16 @@ static int fsl_elbc_run_command(struct mtd_info *mtd)
 		 * bits 28-31 are uncorrectable errors, marked elsewhere.
 		 * for small page nand only 1 bit is used.
 		 * if the ELBC doesn't have the lteccr register it reads 0
+		 * FIXME: 4 bits can be corrected on NANDs with 2k pages, so
+		 * count the number of sub-pages with bitflips and update
+		 * ecc_stats.corrected accordingly.
 		 */
 		if (lteccr & 0x000F000F)
 			out_be32(&lbc->lteccr, 0x000F000F); /* clear lteccr */
-		if (lteccr & 0x000F0000)
+		if (lteccr & 0x000F0000) {
 			mtd->ecc_stats.corrected++;
+			elbc_fcm_ctrl->max_bitflips = 1;
+		}
 	}
 
 	return 0;
@@ -606,41 +614,6 @@ static void fsl_elbc_read_buf(struct mtd_info *mtd, u8 *buf, int len)
 		        len, avail);
 }
 
-/*
- * Verify buffer against the FCM Controller Data Buffer
- */
-static int fsl_elbc_verify_buf(struct mtd_info *mtd, const u_char *buf, int len)
-{
-	struct nand_chip *chip = mtd->priv;
-	struct fsl_elbc_mtd *priv = chip->priv;
-	struct fsl_elbc_fcm_ctrl *elbc_fcm_ctrl = priv->ctrl->nand;
-	int i;
-
-	if (len < 0) {
-		dev_err(priv->dev, "write_buf of %d bytes", len);
-		return -EINVAL;
-	}
-
-	if ((unsigned int)len >
-			elbc_fcm_ctrl->read_bytes - elbc_fcm_ctrl->index) {
-		dev_err(priv->dev,
-			"verify_buf beyond end of buffer "
-			"(%d requested, %u available)\n",
-			len, elbc_fcm_ctrl->read_bytes - elbc_fcm_ctrl->index);
-
-		elbc_fcm_ctrl->index = elbc_fcm_ctrl->read_bytes;
-		return -EINVAL;
-	}
-
-	for (i = 0; i < len; i++)
-		if (in_8(&elbc_fcm_ctrl->addr[elbc_fcm_ctrl->index + i])
-				!= buf[i])
-			break;
-
-	elbc_fcm_ctrl->index += len;
-	return i == len && elbc_fcm_ctrl->status == LTESR_CC ? 0 : -EIO;
-}
-
 /* This function is called after Program and Erase Operations to
  * check for success or failure.
  */
@@ -738,29 +711,33 @@ static int fsl_elbc_chip_init_tail(struct mtd_info *mtd)
 	return 0;
 }
 
-static int fsl_elbc_read_page(struct mtd_info *mtd,
-                              struct nand_chip *chip,
-			      uint8_t *buf,
-			      int page)
+static int fsl_elbc_read_page(struct mtd_info *mtd, struct nand_chip *chip,
+			      uint8_t *buf, int oob_required, int page)
 {
+	struct fsl_elbc_mtd *priv = chip->priv;
+	struct fsl_lbc_ctrl *ctrl = priv->ctrl;
+	struct fsl_elbc_fcm_ctrl *elbc_fcm_ctrl = ctrl->nand;
+
 	fsl_elbc_read_buf(mtd, buf, mtd->writesize);
-	fsl_elbc_read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	if (oob_required)
+		fsl_elbc_read_buf(mtd, chip->oob_poi, mtd->oobsize);
 
 	if (fsl_elbc_wait(mtd, chip) & NAND_STATUS_FAIL)
 		mtd->ecc_stats.failed++;
 
-	return 0;
+	return elbc_fcm_ctrl->max_bitflips;
 }
 
 /* ECC will be calculated automatically, and errors will be detected in
  * waitfunc.
  */
-static void fsl_elbc_write_page(struct mtd_info *mtd,
-                                struct nand_chip *chip,
-                                const uint8_t *buf)
+static int fsl_elbc_write_page(struct mtd_info *mtd, struct nand_chip *chip,
+				const uint8_t *buf, int oob_required)
 {
 	fsl_elbc_write_buf(mtd, buf, mtd->writesize);
 	fsl_elbc_write_buf(mtd, chip->oob_poi, mtd->oobsize);
+
+	return 0;
 }
 
 static int fsl_elbc_chip_init(struct fsl_elbc_mtd *priv)
@@ -786,7 +763,6 @@ static int fsl_elbc_chip_init(struct fsl_elbc_mtd *priv)
 	chip->read_byte = fsl_elbc_read_byte;
 	chip->write_buf = fsl_elbc_write_buf;
 	chip->read_buf = fsl_elbc_read_buf;
-	chip->verify_buf = fsl_elbc_verify_buf;
 	chip->select_chip = fsl_elbc_select_chip;
 	chip->cmdfunc = fsl_elbc_cmdfunc;
 	chip->waitfunc = fsl_elbc_wait;
@@ -795,7 +771,6 @@ static int fsl_elbc_chip_init(struct fsl_elbc_mtd *priv)
 	chip->bbt_md = &bbt_mirror_descr;
 
 	/* set up nand options */
-	chip->options = NAND_NO_READRDY | NAND_NO_AUTOINCR;
 	chip->bbt_options = NAND_BBT_USE_FLASH;
 
 	chip->controller = &elbc_fcm_ctrl->controller;
@@ -814,11 +789,6 @@ static int fsl_elbc_chip_init(struct fsl_elbc_mtd *priv)
 		chip->ecc.size = 512;
 		chip->ecc.bytes = 3;
 		chip->ecc.strength = 1;
-		/*
-		 * FIXME: can hardware ecc correct 4 bitflips if page size is
-		 * 2k?  Then does hardware report number of corrections for this
-		 * case?  If so, ecc_stats reporting needs to be fixed as well.
-		 */
 	} else {
 		/* otherwise fall back to default software ECC */
 		chip->ecc.mode = NAND_ECC_SOFT;
@@ -911,7 +881,8 @@ static int __devinit fsl_elbc_nand_probe(struct platform_device *pdev)
 	elbc_fcm_ctrl->chips[bank] = priv;
 	priv->bank = bank;
 	priv->ctrl = fsl_lbc_ctrl_dev;
-	priv->dev = dev;
+	priv->dev = &pdev->dev;
+	dev_set_drvdata(priv->dev, priv);
 
 	priv->vbase = ioremap(res.start, resource_size(&res));
 	if (!priv->vbase) {
@@ -958,11 +929,10 @@ err:
 
 static int fsl_elbc_nand_remove(struct platform_device *pdev)
 {
-	int i;
 	struct fsl_elbc_fcm_ctrl *elbc_fcm_ctrl = fsl_lbc_ctrl_dev->nand;
-	for (i = 0; i < MAX_BANKS; i++)
-		if (elbc_fcm_ctrl->chips[i])
-			fsl_elbc_chip_remove(elbc_fcm_ctrl->chips[i]);
+	struct fsl_elbc_mtd *priv = dev_get_drvdata(&pdev->dev);
+
+	fsl_elbc_chip_remove(priv);
 
 	mutex_lock(&fsl_elbc_nand_mutex);
 	elbc_fcm_ctrl->counter--;

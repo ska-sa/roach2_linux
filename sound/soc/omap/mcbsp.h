@@ -217,17 +217,20 @@ enum {
 /********************** McBSP DMA operating modes **************************/
 #define MCBSP_DMA_MODE_ELEMENT		0
 #define MCBSP_DMA_MODE_THRESHOLD	1
-#define MCBSP_DMA_MODE_FRAME		2
 
-/********************** McBSP WAKEUPEN bit definitions *********************/
+/********************** McBSP WAKEUPEN/IRQST/IRQEN bit definitions *********/
 #define RSYNCERREN		BIT(0)
 #define RFSREN			BIT(1)
 #define REOFEN			BIT(2)
 #define RRDYEN			BIT(3)
+#define RUNDFLEN		BIT(4)
+#define ROVFLEN			BIT(5)
 #define XSYNCERREN		BIT(7)
 #define XFSXEN			BIT(8)
 #define XEOFEN			BIT(9)
 #define XRDYEN			BIT(10)
+#define XUNDFLEN		BIT(11)
+#define XOVFLEN			BIT(12)
 #define XEMPTYEOFEN		BIT(14)
 
 /* Clock signal muxing options */
@@ -295,6 +298,7 @@ struct omap_mcbsp {
 	int configured;
 	u8 free;
 
+	int irq;
 	int rx_irq;
 	int tx_irq;
 
@@ -329,9 +333,6 @@ void omap_mcbsp_stop(struct omap_mcbsp *mcbsp, int tx, int rx);
 
 /* McBSP functional clock source changing function */
 int omap2_mcbsp_set_clks_src(struct omap_mcbsp *mcbsp, u8 fck_src_id);
-
-/* McBSP signal muxing API */
-int omap_mcbsp_6pin_src_mux(struct omap_mcbsp *mcbsp, u8 mux);
 
 /* Sidetone specific API */
 int omap_st_set_chgain(struct omap_mcbsp *mcbsp, int channel, s16 chgain);

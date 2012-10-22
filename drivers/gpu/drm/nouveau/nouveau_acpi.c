@@ -7,16 +7,12 @@
 #include <acpi/acpi.h>
 #include <linux/mxm-wmi.h>
 
-#include "drmP.h"
-#include "drm.h"
-#include "drm_sarea.h"
-#include "drm_crtc_helper.h"
-#include "nouveau_drv.h"
-#include "nouveau_drm.h"
-#include "nv50_display.h"
-#include "nouveau_connector.h"
-
 #include <linux/vga_switcheroo.h>
+
+#include <drm/drm_edid.h>
+
+#include "nouveau_drm.h"
+#include "nouveau_acpi.h"
 
 #define NOUVEAU_DSM_LED 0x02
 #define NOUVEAU_DSM_LED_STATE 0x00
@@ -211,11 +207,6 @@ static int nouveau_dsm_power_state(enum vga_switcheroo_client_id id,
 	return nouveau_dsm_set_discrete_state(nouveau_dsm_priv.dhandle, state);
 }
 
-static int nouveau_dsm_init(void)
-{
-	return 0;
-}
-
 static int nouveau_dsm_get_client_id(struct pci_dev *pdev)
 {
 	/* easy option one - intel vendor ID means Integrated */
@@ -232,7 +223,6 @@ static int nouveau_dsm_get_client_id(struct pci_dev *pdev)
 static struct vga_switcheroo_handler nouveau_dsm_handler = {
 	.switchto = nouveau_dsm_switchto,
 	.power_state = nouveau_dsm_power_state,
-	.init = nouveau_dsm_init,
 	.get_client_id = nouveau_dsm_get_client_id,
 };
 
@@ -270,7 +260,7 @@ static bool nouveau_dsm_detect(void)
 	struct acpi_buffer buffer = {sizeof(acpi_method_name), acpi_method_name};
 	struct pci_dev *pdev = NULL;
 	int has_dsm = 0;
-	int has_optimus;
+	int has_optimus = 0;
 	int vga_count = 0;
 	bool guid_valid;
 	int retval;
@@ -338,7 +328,8 @@ void nouveau_switcheroo_optimus_dsm(void)
 
 void nouveau_unregister_dsm_handler(void)
 {
-	vga_switcheroo_unregister_handler();
+	if (nouveau_dsm_priv.optimus_detected || nouveau_dsm_priv.dsm_detected)
+		vga_switcheroo_unregister_handler();
 }
 
 /* retrieve the ROM in 4k blocks */
@@ -395,10 +386,9 @@ int nouveau_acpi_get_bios_chunk(uint8_t *bios, int offset, int len)
 	return nouveau_rom_call(nouveau_dsm_priv.rom_handle, bios, offset, len);
 }
 
-int
+void *
 nouveau_acpi_edid(struct drm_device *dev, struct drm_connector *connector)
 {
-	struct nouveau_connector *nv_connector = nouveau_connector(connector);
 	struct acpi_device *acpidev;
 	acpi_handle handle;
 	int type, ret;
@@ -410,21 +400,20 @@ nouveau_acpi_edid(struct drm_device *dev, struct drm_connector *connector)
 		type = ACPI_VIDEO_DISPLAY_LCD;
 		break;
 	default:
-		return -EINVAL;
+		return NULL;
 	}
 
 	handle = DEVICE_ACPI_HANDLE(&dev->pdev->dev);
 	if (!handle)
-		return -ENODEV;
+		return NULL;
 
 	ret = acpi_bus_get_device(handle, &acpidev);
 	if (ret)
-		return -ENODEV;
+		return NULL;
 
 	ret = acpi_video_get_edid(acpidev, type, -1, &edid);
 	if (ret < 0)
-		return ret;
+		return NULL;
 
-	nv_connector->edid = kmemdup(edid, EDID_LENGTH, GFP_KERNEL);
-	return 0;
+	return kmemdup(edid, EDID_LENGTH, GFP_KERNEL);
 }

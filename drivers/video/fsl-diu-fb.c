@@ -834,7 +834,6 @@ static void update_lcdc(struct fb_info *info)
 	diu_ops.set_pixel_clock(var->pixclock);
 
 	out_be32(&hw->syn_pol, 0);	/* SYNC SIGNALS POLARITY */
-	out_be32(&hw->thresholds, 0x00037800); /* The Thresholds */
 	out_be32(&hw->int_status, 0);	/* INTERRUPT STATUS */
 	out_be32(&hw->plut, 0x01F5F666);
 
@@ -1502,8 +1501,8 @@ static int __devinit fsl_diu_probe(struct platform_device *pdev)
 	unsigned int i;
 	int ret;
 
-	data = dma_alloc_coherent(&pdev->dev, sizeof(struct fsl_diu_data),
-				  &dma_addr, GFP_DMA | __GFP_ZERO);
+	data = dmam_alloc_coherent(&pdev->dev, sizeof(struct fsl_diu_data),
+				   &dma_addr, GFP_DMA | __GFP_ZERO);
 	if (!data)
 		return -ENOMEM;
 	data->dma_addr = dma_addr;
@@ -1629,9 +1628,6 @@ error:
 
 	iounmap(data->diu_reg);
 
-	dma_free_coherent(&pdev->dev, sizeof(struct fsl_diu_data), data,
-			  data->dma_addr);
-
 	return ret;
 }
 
@@ -1648,9 +1644,6 @@ static int fsl_diu_remove(struct platform_device *pdev)
 		uninstall_fb(&data->fsl_diu_info[i]);
 
 	iounmap(data->diu_reg);
-
-	dma_free_coherent(&pdev->dev, sizeof(struct fsl_diu_data), data,
-			  data->dma_addr);
 
 	return 0;
 }

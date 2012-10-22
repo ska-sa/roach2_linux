@@ -46,9 +46,9 @@ static int ir_raw_event_thread(void *data)
 	while (!kthread_should_stop()) {
 
 		spin_lock_irq(&raw->lock);
-		retval = kfifo_out(&raw->kfifo, &ev, sizeof(ev));
+		retval = kfifo_len(&raw->kfifo);
 
-		if (!retval) {
+		if (retval < sizeof(ev)) {
 			set_current_state(TASK_INTERRUPTIBLE);
 
 			if (kthread_should_stop())
@@ -59,10 +59,8 @@ static int ir_raw_event_thread(void *data)
 			continue;
 		}
 
+		retval = kfifo_out(&raw->kfifo, &ev, sizeof(ev));
 		spin_unlock_irq(&raw->lock);
-
-
-		BUG_ON(retval != sizeof(ev));
 
 		mutex_lock(&ir_raw_handler_lock);
 		list_for_each_entry(handler, &ir_raw_handler_list, list)
@@ -159,7 +157,9 @@ EXPORT_SYMBOL_GPL(ir_raw_event_store_edge);
  * This routine (which may be called from an interrupt context) works
  * in similar manner to ir_raw_event_store_edge.
  * This routine is intended for devices with limited internal buffer
- * It automerges samples of same type, and handles timeouts
+ * It automerges samples of same type, and handles timeouts. Returns non-zero
+ * if the event was added, and zero if the event was ignored due to idle
+ * processing.
  */
 int ir_raw_event_store_with_filter(struct rc_dev *dev, struct ir_raw_event *ev)
 {
@@ -186,7 +186,7 @@ int ir_raw_event_store_with_filter(struct rc_dev *dev, struct ir_raw_event *ev)
 	    dev->raw->this_ev.duration >= dev->timeout)
 		ir_raw_event_set_idle(dev, true);
 
-	return 0;
+	return 1;
 }
 EXPORT_SYMBOL_GPL(ir_raw_event_store_with_filter);
 

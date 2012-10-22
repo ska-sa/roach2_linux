@@ -48,6 +48,12 @@
 
   <refsect1>
     <title>Description</title>
+
+    <para>These ioctls are <emphasis role="bold">deprecated</emphasis>.
+    New drivers and applications should use &VIDIOC-G-DV-TIMINGS; and &VIDIOC-S-DV-TIMINGS;
+    instead.
+    </para>
+
     <para>To query and select the current DV preset, applications
 use the <constant>VIDIOC_G_DV_PRESET</constant> and <constant>VIDIOC_S_DV_PRESET</constant>
 ioctls which take a pointer to a &v4l2-dv-preset; type as argument.
@@ -69,6 +75,12 @@ If the preset is not supported, it returns an &EINVAL; </para>
 	<listitem>
 	  <para>This ioctl is not supported, or the
 <constant>VIDIOC_S_DV_PRESET</constant>,<constant>VIDIOC_S_DV_PRESET</constant> parameter was unsuitable.</para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><errorcode>ENODATA</errorcode></term>
+	<listitem>
+	  <para>Digital video presets are not supported for this input or output.</para>
 	</listitem>
       </varlistentry>
       <varlistentry>
@@ -97,8 +109,5 @@ If the preset is not supported, it returns an &EINVAL; </para>
 	</tbody>
       </tgroup>
     </table>
-  </refsect1>
-  <refsect1>
-    &return-value;
   </refsect1>
 </refentry>

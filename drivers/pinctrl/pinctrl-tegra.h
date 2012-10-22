@@ -16,6 +16,50 @@
 #ifndef __PINMUX_TEGRA_H__
 #define __PINMUX_TEGRA_H__
 
+enum tegra_pinconf_param {
+	/* argument: tegra_pinconf_pull */
+	TEGRA_PINCONF_PARAM_PULL,
+	/* argument: tegra_pinconf_tristate */
+	TEGRA_PINCONF_PARAM_TRISTATE,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_ENABLE_INPUT,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_OPEN_DRAIN,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_LOCK,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_IORESET,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_HIGH_SPEED_MODE,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_SCHMITT,
+	/* argument: Boolean */
+	TEGRA_PINCONF_PARAM_LOW_POWER_MODE,
+	/* argument: Integer, range is HW-dependant */
+	TEGRA_PINCONF_PARAM_DRIVE_DOWN_STRENGTH,
+	/* argument: Integer, range is HW-dependant */
+	TEGRA_PINCONF_PARAM_DRIVE_UP_STRENGTH,
+	/* argument: Integer, range is HW-dependant */
+	TEGRA_PINCONF_PARAM_SLEW_RATE_FALLING,
+	/* argument: Integer, range is HW-dependant */
+	TEGRA_PINCONF_PARAM_SLEW_RATE_RISING,
+};
+
+enum tegra_pinconf_pull {
+	TEGRA_PINCONFIG_PULL_NONE,
+	TEGRA_PINCONFIG_PULL_DOWN,
+	TEGRA_PINCONFIG_PULL_UP,
+};
+
+enum tegra_pinconf_tristate {
+	TEGRA_PINCONFIG_DRIVEN,
+	TEGRA_PINCONFIG_TRISTATE,
+};
+
+#define TEGRA_PINCONF_PACK(_param_, _arg_) ((_param_) << 16 | (_arg_))
+#define TEGRA_PINCONF_UNPACK_PARAM(_conf_) ((_conf_) >> 16)
+#define TEGRA_PINCONF_UNPACK_ARG(_conf_) ((_conf_) & 0xffff)
+
 /**
  * struct tegra_function - Tegra pinctrl mux function
  * @name: The name of the function, exported to pinctrl core.
@@ -139,25 +183,8 @@ struct tegra_pinctrl_soc_data {
 	unsigned ngroups;
 };
 
-/**
- * tegra_pinctrl_soc_initf() - Retrieve pin controller details for a SoC.
- * @soc_data:	This pointer must be updated to point at a struct containing
- *		details of the SoC.
- */
-typedef void (*tegra_pinctrl_soc_initf)(
-			const struct tegra_pinctrl_soc_data **soc_data);
-
-/**
- * tegra20_pinctrl_init() - Retrieve pin controller details for Tegra20
- * @soc_data:	This pointer will be updated to point at a struct containing
- *		details of Tegra20's pin controller.
- */
-void tegra20_pinctrl_init(const struct tegra_pinctrl_soc_data **soc_data);
-/**
- * tegra30_pinctrl_init() - Retrieve pin controller details for Tegra20
- * @soc_data:	This pointer will be updated to point at a struct containing
- *		details of Tegra30's pin controller.
- */
-void tegra30_pinctrl_init(const struct tegra_pinctrl_soc_data **soc_data);
+int tegra_pinctrl_probe(struct platform_device *pdev,
+			const struct tegra_pinctrl_soc_data *soc_data);
+int tegra_pinctrl_remove(struct platform_device *pdev);
 
 #endif

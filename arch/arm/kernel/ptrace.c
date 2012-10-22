@@ -24,9 +24,14 @@
 #include <linux/hw_breakpoint.h>
 #include <linux/regset.h>
 #include <linux/audit.h>
+#include <linux/tracehook.h>
+#include <linux/unistd.h>
 
 #include <asm/pgtable.h>
 #include <asm/traps.h>
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/syscalls.h>
 
 #define REG_PC	15
 #define REG_PSR	16
@@ -906,50 +911,52 @@ long arch_ptrace(struct task_struct *child, long request,
 	return ret;
 }
 
-#ifdef __ARMEB__
-#define AUDIT_ARCH_NR AUDIT_ARCH_ARMEB
-#else
-#define AUDIT_ARCH_NR AUDIT_ARCH_ARM
-#endif
+enum ptrace_syscall_dir {
+	PTRACE_SYSCALL_ENTER = 0,
+	PTRACE_SYSCALL_EXIT,
+};
 
-asmlinkage int syscall_trace(int why, struct pt_regs *regs, int scno)
+static int ptrace_syscall_trace(struct pt_regs *regs, int scno,
+				enum ptrace_syscall_dir dir)
 {
 	unsigned long ip;
 
-	/*
-	 * Save IP.  IP is used to denote syscall entry/exit:
-	 *  IP = 0 -> entry, = 1 -> exit
-	 */
-	ip = regs->ARM_ip;
-	regs->ARM_ip = why;
-
-	if (!ip)
-		audit_syscall_exit(regs);
-	else
-		audit_syscall_entry(AUDIT_ARCH_NR, scno, regs->ARM_r0,
-				    regs->ARM_r1, regs->ARM_r2, regs->ARM_r3);
+	current_thread_info()->syscall = scno;
 
 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
 		return scno;
-	if (!(current->ptrace & PT_PTRACED))
-		return scno;
 
-	current_thread_info()->syscall = scno;
-
-	/* the 0x80 provides a way for the tracing parent to distinguish
-	   between a syscall stop and SIGTRAP delivery */
-	ptrace_notify(SIGTRAP | ((current->ptrace & PT_TRACESYSGOOD)
-				 ? 0x80 : 0));
 	/*
-	 * this isn't the same as continuing with a signal, but it will do
-	 * for normal use.  strace only continues with a signal if the
-	 * stopping signal is not SIGTRAP.  -brl
+	 * IP is used to denote syscall entry/exit:
+	 * IP = 0 -> entry, =1 -> exit
 	 */
-	if (current->exit_code) {
-		send_sig(current->exit_code, current, 1);
-		current->exit_code = 0;
-	}
-	regs->ARM_ip = ip;
+	ip = regs->ARM_ip;
+	regs->ARM_ip = dir;
 
+	if (dir == PTRACE_SYSCALL_EXIT)
+		tracehook_report_syscall_exit(regs, 0);
+	else if (tracehook_report_syscall_entry(regs))
+		current_thread_info()->syscall = -1;
+
+	regs->ARM_ip = ip;
 	return current_thread_info()->syscall;
+}
+
+asmlinkage int syscall_trace_enter(struct pt_regs *regs, int scno)
+{
+	scno = ptrace_syscall_trace(regs, scno, PTRACE_SYSCALL_ENTER);
+	if (test_thread_flag(TIF_SYSCALL_TRACEPOINT))
+		trace_sys_enter(regs, scno);
+	audit_syscall_entry(AUDIT_ARCH_ARM, scno, regs->ARM_r0, regs->ARM_r1,
+			    regs->ARM_r2, regs->ARM_r3);
+	return scno;
+}
+
+asmlinkage int syscall_trace_exit(struct pt_regs *regs, int scno)
+{
+	scno = ptrace_syscall_trace(regs, scno, PTRACE_SYSCALL_EXIT);
+	if (test_thread_flag(TIF_SYSCALL_TRACEPOINT))
+		trace_sys_exit(regs, scno);
+	audit_syscall_exit(regs);
+	return scno;
 }

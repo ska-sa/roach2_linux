@@ -157,7 +157,7 @@ enum {
 typedef struct ax25_uid_assoc {
 	struct hlist_node	uid_node;
 	atomic_t		refcount;
-	uid_t			uid;
+	kuid_t			uid;
 	ax25_address		call;
 } ax25_uid_assoc;
 
@@ -215,7 +215,7 @@ typedef struct ax25_dev {
 	struct ax25_dev		*next;
 	struct net_device	*dev;
 	struct net_device	*forward;
-	struct ctl_table	*systable;
+	struct ctl_table_header *sysheader;
 	int			values[AX25_MAX_VALUES];
 #if defined(CONFIG_AX25_DAMA_SLAVE) || defined(CONFIG_AX25_DAMA_MASTER)
 	ax25_dama_info		dama;
@@ -434,18 +434,18 @@ extern unsigned long ax25_display_timer(struct timer_list *);
 
 /* ax25_uid.c */
 extern int  ax25_uid_policy;
-extern ax25_uid_assoc *ax25_findbyuid(uid_t);
+extern ax25_uid_assoc *ax25_findbyuid(kuid_t);
 extern int __must_check ax25_uid_ioctl(int, struct sockaddr_ax25 *);
 extern const struct file_operations ax25_uid_fops;
 extern void ax25_uid_free(void);
 
 /* sysctl_net_ax25.c */
 #ifdef CONFIG_SYSCTL
-extern void ax25_register_sysctl(void);
-extern void ax25_unregister_sysctl(void);
+extern int ax25_register_dev_sysctl(ax25_dev *ax25_dev);
+extern void ax25_unregister_dev_sysctl(ax25_dev *ax25_dev);
 #else
-static inline void ax25_register_sysctl(void) {};
-static inline void ax25_unregister_sysctl(void) {};
+static inline int ax25_register_dev_sysctl(ax25_dev *ax25_dev) { return 0; }
+static inline void ax25_unregister_dev_sysctl(ax25_dev *ax25_dev) {}
 #endif /* CONFIG_SYSCTL */
 
 #endif

@@ -38,7 +38,7 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		handle_t *handle = NULL;
 		int err, migrate = 0;
 		struct ext4_iloc iloc;
-		unsigned int oldflags;
+		unsigned int oldflags, mask, i;
 		unsigned int jflag;
 
 		if (!inode_owner_or_capable(inode))
@@ -115,9 +115,14 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (err)
 			goto flags_err;
 
-		flags = flags & EXT4_FL_USER_MODIFIABLE;
-		flags |= oldflags & ~EXT4_FL_USER_MODIFIABLE;
-		ei->i_flags = flags;
+		for (i = 0, mask = 1; i < 32; i++, mask <<= 1) {
+			if (!(mask & EXT4_FL_USER_MODIFIABLE))
+				continue;
+			if (mask & flags)
+				ext4_set_inode_flag(inode, i);
+			else
+				ext4_clear_inode_flag(inode, i);
+		}
 
 		ext4_set_inode_flags(inode);
 		inode->i_ctime = ext4_current_time(inode);
@@ -151,6 +156,13 @@ flags_out:
 
 		if (!inode_owner_or_capable(inode))
 			return -EPERM;
+
+		if (EXT4_HAS_RO_COMPAT_FEATURE(inode->i_sb,
+				EXT4_FEATURE_RO_COMPAT_METADATA_CSUM)) {
+			ext4_warning(sb, "Setting inode version is not "
+				     "supported with metadata_csum enabled.");
+			return -ENOTTY;
+		}
 
 		err = mnt_want_write_file(filp);
 		if (err)
@@ -221,7 +233,7 @@ group_extend_out:
 
 	case EXT4_IOC_MOVE_EXT: {
 		struct move_extent me;
-		struct file *donor_filp;
+		struct fd donor;
 		int err;
 
 		if (!(filp->f_mode & FMODE_READ) ||
@@ -233,11 +245,11 @@ group_extend_out:
 			return -EFAULT;
 		me.moved_len = 0;
 
-		donor_filp = fget(me.donor_fd);
-		if (!donor_filp)
+		donor = fdget(me.donor_fd);
+		if (!donor.file)
 			return -EBADF;
 
-		if (!(donor_filp->f_mode & FMODE_WRITE)) {
+		if (!(donor.file->f_mode & FMODE_WRITE)) {
 			err = -EBADF;
 			goto mext_out;
 		}
@@ -246,23 +258,23 @@ group_extend_out:
 			       EXT4_FEATURE_RO_COMPAT_BIGALLOC)) {
 			ext4_msg(sb, KERN_ERR,
 				 "Online defrag not supported with bigalloc");
-			return -EOPNOTSUPP;
+			err = -EOPNOTSUPP;
+			goto mext_out;
 		}
 
 		err = mnt_want_write_file(filp);
 		if (err)
 			goto mext_out;
 
-		err = ext4_move_extents(filp, donor_filp, me.orig_start,
+		err = ext4_move_extents(filp, donor.file, me.orig_start,
 					me.donor_start, me.len, &me.moved_len);
 		mnt_drop_write_file(filp);
-		mnt_drop_write(filp->f_path.mnt);
 
 		if (copy_to_user((struct move_extent __user *)arg,
 				 &me, sizeof(me)))
 			err = -EFAULT;
 mext_out:
-		fput(donor_filp);
+		fdput(donor);
 		return err;
 	}
 
@@ -354,31 +366,16 @@ group_add_out:
 			return -EOPNOTSUPP;
 		}
 
-		if (EXT4_HAS_INCOMPAT_FEATURE(sb,
-			       EXT4_FEATURE_INCOMPAT_META_BG)) {
-			ext4_msg(sb, KERN_ERR,
-				 "Online resizing not (yet) supported with meta_bg");
-			return -EOPNOTSUPP;
-		}
-
 		if (copy_from_user(&n_blocks_count, (__u64 __user *)arg,
 				   sizeof(__u64))) {
 			return -EFAULT;
-		}
-
-		if (n_blocks_count > MAX_32_NUM &&
-		    !EXT4_HAS_INCOMPAT_FEATURE(sb,
-					       EXT4_FEATURE_INCOMPAT_64BIT)) {
-			ext4_msg(sb, KERN_ERR,
-				 "File system only supports 32-bit block numbers");
-			return -EOPNOTSUPP;
 		}
 
 		err = ext4_resize_begin(sb);
 		if (err)
 			return err;
 
-		err = mnt_want_write(filp->f_path.mnt);
+		err = mnt_want_write_file(filp);
 		if (err)
 			goto resizefs_out;
 
@@ -390,7 +387,7 @@ group_add_out:
 		}
 		if (err == 0)
 			err = err2;
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 resizefs_out:
 		ext4_resize_end(sb);
 		return err;
@@ -407,13 +404,6 @@ resizefs_out:
 
 		if (!blk_queue_discard(q))
 			return -EOPNOTSUPP;
-
-		if (EXT4_HAS_RO_COMPAT_FEATURE(sb,
-			       EXT4_FEATURE_RO_COMPAT_BIGALLOC)) {
-			ext4_msg(sb, KERN_ERR,
-				 "FITRIM not supported with bigalloc");
-			return -EOPNOTSUPP;
-		}
 
 		if (copy_from_user(&range, (struct fstrim_range __user *)arg,
 		    sizeof(range)))

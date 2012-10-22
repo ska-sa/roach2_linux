@@ -191,6 +191,7 @@ struct fw_ohci {
 	unsigned quirks;
 	unsigned int pri_req_max;
 	u32 bus_time;
+	bool bus_time_running;
 	bool is_root;
 	bool csr_state_setclear_abdicate;
 	int n_ir;
@@ -1726,6 +1727,13 @@ static u32 update_bus_time(struct fw_ohci *ohci)
 {
 	u32 cycle_time_seconds = get_cycle_time(ohci) >> 25;
 
+	if (unlikely(!ohci->bus_time_running)) {
+		reg_write(ohci, OHCI1394_IntMaskSet, OHCI1394_cycle64Seconds);
+		ohci->bus_time = (lower_32_bits(get_seconds()) & ~0x7f) |
+		                 (cycle_time_seconds & 0x40);
+		ohci->bus_time_running = true;
+	}
+
 	if ((ohci->bus_time & 0x40) != (cycle_time_seconds & 0x40))
 		ohci->bus_time += 0x40;
 
@@ -1769,11 +1777,35 @@ static int get_self_id_pos(struct fw_ohci *ohci, u32 self_id,
 	return i;
 }
 
+static int initiated_reset(struct fw_ohci *ohci)
+{
+	int reg;
+	int ret = 0;
+
+	mutex_lock(&ohci->phy_reg_mutex);
+	reg = write_phy_reg(ohci, 7, 0xe0); /* Select page 7 */
+	if (reg >= 0) {
+		reg = read_phy_reg(ohci, 8);
+		reg |= 0x40;
+		reg = write_phy_reg(ohci, 8, reg); /* set PMODE bit */
+		if (reg >= 0) {
+			reg = read_phy_reg(ohci, 12); /* read register 12 */
+			if (reg >= 0) {
+				if ((reg & 0x08) == 0x08) {
+					/* bit 3 indicates "initiated reset" */
+					ret = 0x2;
+				}
+			}
+		}
+	}
+	mutex_unlock(&ohci->phy_reg_mutex);
+	return ret;
+}
+
 /*
  * TI TSB82AA2B and TSB12LV26 do not receive the selfID of a locally
  * attached TSB41BA3D phy; see http://www.ti.com/litv/pdf/sllz059.
  * Construct the selfID from phy register contents.
- * FIXME:  How to determine the selfID.i flag?
  */
 static int find_and_insert_self_id(struct fw_ohci *ohci, int self_id_count)
 {
@@ -1806,6 +1838,8 @@ static int find_and_insert_self_id(struct fw_ohci *ohci, int self_id_count)
 		self_id |= ((status & 0x3) << (6 - (i * 2)));
 	}
 
+	self_id |= initiated_reset(ohci);
+
 	pos = get_self_id_pos(ohci, self_id, self_id_count);
 	if (pos >= 0) {
 		memmove(&(ohci->self_id_buffer[pos+1]),
@@ -1821,9 +1855,8 @@ static void bus_reset_work(struct work_struct *work)
 {
 	struct fw_ohci *ohci =
 		container_of(work, struct fw_ohci, bus_reset_work);
-	int self_id_count, i, j, reg;
-	int generation, new_generation;
-	unsigned long flags;
+	int self_id_count, generation, new_generation, i, j;
+	u32 reg;
 	void *free_rom = NULL;
 	dma_addr_t free_rom_bus = 0;
 	bool is_new_root;
@@ -1930,13 +1963,13 @@ static void bus_reset_work(struct work_struct *work)
 	}
 
 	/* FIXME: Document how the locking works. */
-	spin_lock_irqsave(&ohci->lock, flags);
+	spin_lock_irq(&ohci->lock);
 
 	ohci->generation = -1; /* prevent AT packet queueing */
 	context_stop(&ohci->at_request_ctx);
 	context_stop(&ohci->at_response_ctx);
 
-	spin_unlock_irqrestore(&ohci->lock, flags);
+	spin_unlock_irq(&ohci->lock);
 
 	/*
 	 * Per OHCI 1.2 draft, clause 7.2.3.3, hardware may leave unsent
@@ -1946,7 +1979,7 @@ static void bus_reset_work(struct work_struct *work)
 	at_context_flush(&ohci->at_request_ctx);
 	at_context_flush(&ohci->at_response_ctx);
 
-	spin_lock_irqsave(&ohci->lock, flags);
+	spin_lock_irq(&ohci->lock);
 
 	ohci->generation = generation;
 	reg_write(ohci, OHCI1394_IntEventClear, OHCI1394_busReset);
@@ -1990,7 +2023,7 @@ static void bus_reset_work(struct work_struct *work)
 	reg_write(ohci, OHCI1394_PhyReqFilterLoSet, ~0);
 #endif
 
-	spin_unlock_irqrestore(&ohci->lock, flags);
+	spin_unlock_irq(&ohci->lock);
 
 	if (free_rom)
 		dma_free_coherent(ohci->card.device, CONFIG_ROM_SIZE,
@@ -2214,7 +2247,7 @@ static int ohci_enable(struct fw_card *card,
 {
 	struct fw_ohci *ohci = fw_ohci(card);
 	struct pci_dev *dev = to_pci_dev(card->device);
-	u32 lps, seconds, version, irqs;
+	u32 lps, version, irqs;
 	int i, ret;
 
 	if (software_reset(ohci)) {
@@ -2270,9 +2303,12 @@ static int ohci_enable(struct fw_card *card,
 		  (OHCI1394_MAX_PHYS_RESP_RETRIES << 8) |
 		  (200 << 16));
 
-	seconds = lower_32_bits(get_seconds());
-	reg_write(ohci, OHCI1394_IsochronousCycleTimer, seconds << 25);
-	ohci->bus_time = seconds & ~0x3f;
+	ohci->bus_time_running = false;
+
+	for (i = 0; i < 32; i++)
+		if (ohci->ir_context_support & (1 << i))
+			reg_write(ohci, OHCI1394_IsoRcvContextControlClear(i),
+				  IR_CONTEXT_MULTI_CHANNEL_MODE);
 
 	version = reg_read(ohci, OHCI1394_Version) & 0x00ff00ff;
 	if (version >= OHCI_VERSION_1_1) {
@@ -2370,7 +2406,6 @@ static int ohci_enable(struct fw_card *card,
 		OHCI1394_postedWriteErr |
 		OHCI1394_selfIDComplete |
 		OHCI1394_regAccessFail |
-		OHCI1394_cycle64Seconds |
 		OHCI1394_cycleInconsistent |
 		OHCI1394_unrecoverableError |
 		OHCI1394_cycleTooLong |
@@ -2402,7 +2437,6 @@ static int ohci_set_config_rom(struct fw_card *card,
 			       const __be32 *config_rom, size_t length)
 {
 	struct fw_ohci *ohci;
-	unsigned long flags;
 	__be32 *next_config_rom;
 	dma_addr_t uninitialized_var(next_config_rom_bus);
 
@@ -2441,7 +2475,7 @@ static int ohci_set_config_rom(struct fw_card *card,
 	if (next_config_rom == NULL)
 		return -ENOMEM;
 
-	spin_lock_irqsave(&ohci->lock, flags);
+	spin_lock_irq(&ohci->lock);
 
 	/*
 	 * If there is not an already pending config_rom update,
@@ -2467,7 +2501,7 @@ static int ohci_set_config_rom(struct fw_card *card,
 
 	reg_write(ohci, OHCI1394_ConfigROMmap, ohci->next_config_rom_bus);
 
-	spin_unlock_irqrestore(&ohci->lock, flags);
+	spin_unlock_irq(&ohci->lock);
 
 	/* If we didn't use the DMA allocation, delete it. */
 	if (next_config_rom != NULL)
@@ -2660,7 +2694,8 @@ static void ohci_write_csr(struct fw_card *card, int csr_offset, u32 value)
 
 	case CSR_BUS_TIME:
 		spin_lock_irqsave(&ohci->lock, flags);
-		ohci->bus_time = (ohci->bus_time & 0x7f) | (value & ~0x7f);
+		ohci->bus_time = (update_bus_time(ohci) & 0x40) |
+		                 (value & ~0x7f);
 		spin_unlock_irqrestore(&ohci->lock, flags);
 		break;
 
@@ -2891,10 +2926,9 @@ static struct fw_iso_context *ohci_allocate_iso_context(struct fw_card *card,
 	descriptor_callback_t uninitialized_var(callback);
 	u64 *uninitialized_var(channels);
 	u32 *uninitialized_var(mask), uninitialized_var(regs);
-	unsigned long flags;
 	int index, ret = -EBUSY;
 
-	spin_lock_irqsave(&ohci->lock, flags);
+	spin_lock_irq(&ohci->lock);
 
 	switch (type) {
 	case FW_ISO_CONTEXT_TRANSMIT:
@@ -2938,7 +2972,7 @@ static struct fw_iso_context *ohci_allocate_iso_context(struct fw_card *card,
 		ret = -ENOSYS;
 	}
 
-	spin_unlock_irqrestore(&ohci->lock, flags);
+	spin_unlock_irq(&ohci->lock);
 
 	if (index < 0)
 		return ERR_PTR(ret);
@@ -2964,7 +2998,7 @@ static struct fw_iso_context *ohci_allocate_iso_context(struct fw_card *card,
  out_with_header:
 	free_page((unsigned long)ctx->header);
  out:
-	spin_lock_irqsave(&ohci->lock, flags);
+	spin_lock_irq(&ohci->lock);
 
 	switch (type) {
 	case FW_ISO_CONTEXT_RECEIVE:
@@ -2977,7 +3011,7 @@ static struct fw_iso_context *ohci_allocate_iso_context(struct fw_card *card,
 	}
 	*mask |= 1 << index;
 
-	spin_unlock_irqrestore(&ohci->lock, flags);
+	spin_unlock_irq(&ohci->lock);
 
 	return ERR_PTR(ret);
 }
@@ -3542,6 +3576,13 @@ static int __devinit pci_probe(struct pci_dev *dev,
 
 	INIT_WORK(&ohci->bus_reset_work, bus_reset_work);
 
+	if (!(pci_resource_flags(dev, 0) & IORESOURCE_MEM) ||
+	    pci_resource_len(dev, 0) < OHCI1394_REGISTER_SIZE) {
+		dev_err(&dev->dev, "invalid MMIO resource\n");
+		err = -ENXIO;
+		goto fail_disable;
+	}
+
 	err = pci_request_region(dev, 0, ohci_driver_name);
 	if (err) {
 		dev_err(&dev->dev, "MMIO resource unavailable\n");
@@ -3789,6 +3830,8 @@ static struct pci_driver fw_ohci_pci_driver = {
 #endif
 };
 
+module_pci_driver(fw_ohci_pci_driver);
+
 MODULE_AUTHOR("Kristian Hoegsberg <krh@bitplanet.net>");
 MODULE_DESCRIPTION("Driver for PCI OHCI IEEE1394 controllers");
 MODULE_LICENSE("GPL");
@@ -3797,16 +3840,3 @@ MODULE_LICENSE("GPL");
 #ifndef CONFIG_IEEE1394_OHCI1394_MODULE
 MODULE_ALIAS("ohci1394");
 #endif
-
-static int __init fw_ohci_init(void)
-{
-	return pci_register_driver(&fw_ohci_pci_driver);
-}
-
-static void __exit fw_ohci_cleanup(void)
-{
-	pci_unregister_driver(&fw_ohci_pci_driver);
-}
-
-module_init(fw_ohci_init);
-module_exit(fw_ohci_cleanup);

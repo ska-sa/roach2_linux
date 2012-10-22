@@ -328,6 +328,8 @@ static int mb862xxfb_ioctl(struct fb_info *fbi, unsigned int cmd,
 	case MB862XX_L1_SET_CFG:
 		if (copy_from_user(l1_cfg, argp, sizeof(*l1_cfg)))
 			return -EFAULT;
+		if (l1_cfg->dh == 0 || l1_cfg->dw == 0)
+			return -EINVAL;
 		if ((l1_cfg->sw >= l1_cfg->dw) && (l1_cfg->sh >= l1_cfg->dh)) {
 			/* downscaling */
 			outreg(cap, GC_CAP_CSC,
@@ -579,7 +581,7 @@ static ssize_t mb862xxfb_show_dispregs(struct device *dev,
 
 static DEVICE_ATTR(dispregs, 0444, mb862xxfb_show_dispregs, NULL);
 
-irqreturn_t mb862xx_intr(int irq, void *dev_id)
+static irqreturn_t mb862xx_intr(int irq, void *dev_id)
 {
 	struct mb862xxfb_par *par = (struct mb862xxfb_par *) dev_id;
 	unsigned long reg_ist, mask;
@@ -1050,12 +1052,14 @@ static int __devinit mb862xx_pci_probe(struct pci_dev *pdev,
 		break;
 	default:
 		/* should never occur */
+		ret = -EIO;
 		goto rel_reg;
 	}
 
 	par->fb_base = ioremap(par->fb_base_phys, par->mapped_vram);
 	if (par->fb_base == NULL) {
 		dev_err(dev, "Cannot map framebuffer\n");
+		ret = -EIO;
 		goto rel_reg;
 	}
 
@@ -1071,11 +1075,13 @@ static int __devinit mb862xx_pci_probe(struct pci_dev *pdev,
 	dev_dbg(dev, "mmio phys 0x%llx 0x%lx\n",
 		(unsigned long long)par->mmio_base_phys, (ulong)par->mmio_len);
 
-	if (mb862xx_pci_gdc_init(par))
+	ret = mb862xx_pci_gdc_init(par);
+	if (ret)
 		goto io_unmap;
 
-	if (request_irq(par->irq, mb862xx_intr, IRQF_SHARED,
-			DRV_NAME, (void *)par)) {
+	ret = request_irq(par->irq, mb862xx_intr, IRQF_SHARED,
+			  DRV_NAME, (void *)par);
+	if (ret) {
 		dev_err(dev, "Cannot request irq\n");
 		goto io_unmap;
 	}

@@ -128,7 +128,7 @@ config MTD_AFS_PARTS
 
 config MTD_OF_PARTS
 	tristate "OpenFirmware partitioning information support"
-	default Y
+	default y
 	depends on OF
 	help
 	  This provides a partition parsing function which derives
@@ -147,6 +147,13 @@ config MTD_BCM63XX_PARTS
 	help
 	  This provides partions parsing for BCM63xx devices with CFE
 	  bootloaders.
+
+config MTD_BCM47XX_PARTS
+	tristate "BCM47XX partitioning support"
+	depends on BCM47XX
+	help
+	  This provides partitions parser for devices based on BCM47xx
+	  boards.
 
 comment "User Modules And Translation Layers"
 

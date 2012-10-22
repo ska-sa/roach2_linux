@@ -156,7 +156,7 @@ int i_APCI3120_InsnReadAnalogInput(struct comedi_device *dev, struct comedi_subd
 	} else
 		us_ConvertTiming = (unsigned short) (devpriv->ui_EocEosConversionTime / 1000);	/*  nano to useconds */
 
-	/*  this_board->i_hwdrv_InsnReadAnalogInput(dev,us_ConvertTiming,insn->n,&insn->chanspec,data,insn->unused[0]); */
+	/*  this_board->ai_read(dev,us_ConvertTiming,insn->n,&insn->chanspec,data,insn->unused[0]); */
 
 	/*  Clear software registers */
 	devpriv->b_TimerSelectMode = 0;
@@ -479,57 +479,26 @@ int i_APCI3120_CommandTestAnalogInput(struct comedi_device *dev, struct comedi_s
 	struct comedi_cmd *cmd)
 {
 	int err = 0;
-	int tmp;		/*  divisor1,divisor2; */
 
-	/*  step 1: make sure trigger sources are trivially valid */
+	/* Step 1 : check if triggers are trivially valid */
 
-	tmp = cmd->start_src;
-	cmd->start_src &= TRIG_NOW | TRIG_EXT;
-	if (!cmd->start_src || tmp != cmd->start_src)
-		err++;
-
-	tmp = cmd->scan_begin_src;
-	cmd->scan_begin_src &= TRIG_TIMER | TRIG_FOLLOW;
-	if (!cmd->scan_begin_src || tmp != cmd->scan_begin_src)
-		err++;
-
-	tmp = cmd->convert_src;
-	cmd->convert_src &= TRIG_TIMER;
-	if (!cmd->convert_src || tmp != cmd->convert_src)
-		err++;
-
-	tmp = cmd->scan_end_src;
-	cmd->scan_end_src &= TRIG_COUNT;
-	if (!cmd->scan_end_src || tmp != cmd->scan_end_src)
-		err++;
-
-	tmp = cmd->stop_src;
-	cmd->stop_src &= TRIG_COUNT | TRIG_NONE;
-	if (!cmd->stop_src || tmp != cmd->stop_src)
-		err++;
+	err |= cfc_check_trigger_src(&cmd->start_src, TRIG_NOW | TRIG_EXT);
+	err |= cfc_check_trigger_src(&cmd->scan_begin_src,
+					TRIG_TIMER | TRIG_FOLLOW);
+	err |= cfc_check_trigger_src(&cmd->convert_src, TRIG_TIMER);
+	err |= cfc_check_trigger_src(&cmd->scan_end_src, TRIG_COUNT);
+	err |= cfc_check_trigger_src(&cmd->stop_src, TRIG_COUNT | TRIG_NONE);
 
 	if (err)
 		return 1;
 
-	/* step 2: make sure trigger sources are unique and mutually compatible */
+	/* Step 2a : make sure trigger sources are unique */
 
-	if (cmd->start_src != TRIG_NOW && cmd->start_src != TRIG_EXT)
-		err++;
+	err |= cfc_check_trigger_is_unique(cmd->start_src);
+	err |= cfc_check_trigger_is_unique(cmd->scan_begin_src);
+	err |= cfc_check_trigger_is_unique(cmd->stop_src);
 
-	if (cmd->scan_begin_src != TRIG_TIMER &&
-		cmd->scan_begin_src != TRIG_FOLLOW)
-		err++;
-
-	if (cmd->convert_src != TRIG_TIMER)
-		err++;
-
-	if (cmd->scan_end_src != TRIG_COUNT) {
-		cmd->scan_end_src = TRIG_COUNT;
-		err++;
-	}
-
-	if (cmd->stop_src != TRIG_NONE && cmd->stop_src != TRIG_COUNT)
-		err++;
+	/* Step 2b : and mutually compatible */
 
 	if (err)
 		return 2;
@@ -670,7 +639,7 @@ int i_APCI3120_CommandAnalogInput(struct comedi_device *dev, struct comedi_subde
 			/*  mode 1 */
 
 			devpriv->ui_AiTimer0 = cmd->convert_arg;	/*  timer constant in nano seconds */
-			/* return this_board->i_hwdrv_CommandAnalogInput(1,dev,s); */
+			/* return this_board->ai_cmd(1,dev,s); */
 			return i_APCI3120_CyclicAnalogInput(1, dev, s);
 		}
 
@@ -680,7 +649,7 @@ int i_APCI3120_CommandAnalogInput(struct comedi_device *dev, struct comedi_subde
 		/*  mode 2 */
 		devpriv->ui_AiTimer1 = cmd->scan_begin_arg;
 		devpriv->ui_AiTimer0 = cmd->convert_arg;	/*  variable changed timer2 to timer0 */
-		/* return this_board->i_hwdrv_CommandAnalogInput(2,dev,s); */
+		/* return this_board->ai_cmd(2,dev,s); */
 		return i_APCI3120_CyclicAnalogInput(2, dev, s);
 	}
 	return -1;
@@ -1451,7 +1420,7 @@ void v_APCI3120_Interrupt(int irq, void *d)
 	unsigned short us_TmpValue;
 	unsigned char b_DummyRead;
 
-	struct comedi_subdevice *s = dev->subdevices + 0;
+	struct comedi_subdevice *s = &dev->subdevices[0];
 	ui_Check = 1;
 
 	int_daq = inw(dev->iobase + APCI3120_RD_STATUS) & 0xf000;	/*  get IRQ reasons */
@@ -1656,7 +1625,7 @@ void v_APCI3120_Interrupt(int irq, void *d)
 int i_APCI3120_InterruptHandleEos(struct comedi_device *dev)
 {
 	int n_chan, i;
-	struct comedi_subdevice *s = dev->subdevices + 0;
+	struct comedi_subdevice *s = &dev->subdevices[0];
 	int err = 1;
 
 	n_chan = devpriv->ui_AiNbrofChannels;
@@ -1698,7 +1667,7 @@ int i_APCI3120_InterruptHandleEos(struct comedi_device *dev)
 void v_APCI3120_InterruptDma(int irq, void *d)
 {
 	struct comedi_device *dev = d;
-	struct comedi_subdevice *s = dev->subdevices + 0;
+	struct comedi_subdevice *s = &dev->subdevices[0];
 	unsigned int next_dma_buf, samplesinbuf;
 	unsigned long low_word, high_word, var;
 
@@ -1922,7 +1891,7 @@ int i_APCI3120_InsnConfigTimer(struct comedi_device *dev, struct comedi_subdevic
 
 	ui_Timervalue2 = data[1] / 1000;	/*  convert nano seconds  to u seconds */
 
-	/* this_board->i_hwdrv_InsnConfigTimer(dev, ui_Timervalue2,(unsigned char)data[0]); */
+	/* this_board->timer_config(dev, ui_Timervalue2,(unsigned char)data[0]); */
 	us_TmpValue = (unsigned short) inw(devpriv->iobase + APCI3120_RD_STATUS);
 
 /*
@@ -2092,7 +2061,7 @@ int i_APCI3120_InsnWriteTimer(struct comedi_device *dev, struct comedi_subdevice
 			ui_Timervalue2 = 0;
 	}
 
-	/* this_board->i_hwdrv_InsnWriteTimer(dev,data[0],ui_Timervalue2); */
+	/* this_board->timer_write(dev,data[0],ui_Timervalue2); */
 
 	switch (data[0]) {
 	case APCI3120_START:
@@ -2260,7 +2229,7 @@ int i_APCI3120_InsnReadTimer(struct comedi_device *dev, struct comedi_subdevice 
 		comedi_error(dev, "\nread:timer2  not configured ");
 	}
 
-	/* this_board->i_hwdrv_InsnReadTimer(dev,data); */
+	/* this_board->timer_read(dev,data); */
 	if (devpriv->b_Timer2Mode == APCI3120_TIMER) {
 
 		/* Read the LOW unsigned short of Timer 2 register */
@@ -2331,7 +2300,7 @@ int i_APCI3120_InsnReadDigitalInput(struct comedi_device *dev,
 
 	ui_Chan = CR_CHAN(insn->chanspec);	/*  channel specified */
 
-	/* this_board->i_hwdrv_InsnReadDigitalInput(dev,ui_Chan,data); */
+	/* this_board->di_read(dev,ui_Chan,data); */
 	if (ui_Chan <= 3) {
 		ui_TmpValue = (unsigned int) inw(devpriv->iobase + APCI3120_RD_STATUS);
 
@@ -2379,7 +2348,7 @@ int i_APCI3120_InsnBitsDigitalInput(struct comedi_device *dev, struct comedi_sub
 	*****/
 
 	*data = (ui_TmpValue >> 8) & 0xf;
-	/* this_board->i_hwdrv_InsnBitsDigitalInput(dev,data); */
+	/* this_board->di_bits(dev,data); */
 	return insn->n;
 }
 
@@ -2595,7 +2564,7 @@ int i_APCI3120_InsnWriteAnalogOutput(struct comedi_device *dev,
 	ui_Range = CR_RANGE(insn->chanspec);
 	ui_Channel = CR_CHAN(insn->chanspec);
 
-	/* this_board->i_hwdrv_InsnWriteAnalogOutput(dev, ui_Range, ui_Channel,data[0]); */
+	/* this_board->ao_write(dev, ui_Range, ui_Channel,data[0]); */
 	if (ui_Range) {		/*  if 1 then unipolar */
 
 		if (data[0] != 0)

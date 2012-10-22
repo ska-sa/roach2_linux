@@ -72,10 +72,6 @@ struct thread_struct {
 #define task_pt_regs(task) user_regs(task_thread_info(task))
 #define current_regs() user_regs(current_thread_info())
 
-extern inline void prepare_to_copy(struct task_struct *tsk)
-{
-}
-
 #define INIT_SP         (sizeof(init_stack) + (unsigned long) &init_stack)
 
 #define INIT_THREAD  { }
@@ -107,7 +103,7 @@ extern unsigned long thread_saved_pc(struct task_struct *t);
 
 #define init_stack      (init_thread_union.stack)
 
-#define cpu_relax()     do { } while (0)
+#define cpu_relax()     barrier()
 
 #endif /* __ASSEMBLY__ */
 #endif /* __ASM_OPENRISC_PROCESSOR_H */

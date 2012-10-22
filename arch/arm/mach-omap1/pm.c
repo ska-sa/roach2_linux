@@ -53,7 +53,7 @@
 #include <plat/clock.h>
 #include <plat/sram.h>
 #include <plat/tc.h>
-#include <plat/mux.h>
+#include <mach/mux.h>
 #include <plat/dma.h>
 #include <plat/dmtimer.h>
 
@@ -569,11 +569,10 @@ static int omap_pm_read_proc(
 
 static void omap_pm_init_proc(void)
 {
-	struct proc_dir_entry *entry;
-
-	entry = create_proc_read_entry("driver/omap_pm",
-				       S_IWUSR | S_IRUGO, NULL,
-				       omap_pm_read_proc, NULL);
+	/* XXX Appears to leak memory */
+	create_proc_read_entry("driver/omap_pm",
+			       S_IWUSR | S_IRUGO, NULL,
+			       omap_pm_read_proc, NULL);
 }
 
 #endif /* DEBUG && CONFIG_PROC_FS */

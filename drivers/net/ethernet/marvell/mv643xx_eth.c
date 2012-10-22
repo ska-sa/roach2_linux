@@ -57,6 +57,7 @@
 #include <linux/types.h>
 #include <linux/inet_lro.h>
 #include <linux/slab.h>
+#include <linux/clk.h>
 
 static char mv643xx_eth_driver_name[] = "mv643xx_eth";
 static char mv643xx_eth_driver_version[] = "1.4";
@@ -289,10 +290,10 @@ struct mv643xx_eth_shared_private {
 	/*
 	 * Hardware-specific parameters.
 	 */
-	unsigned int t_clk;
 	int extended_rx_coal_limit;
 	int tx_bw_control;
 	int tx_csum_limit;
+
 };
 
 #define TX_BW_CONTROL_ABSENT		0
@@ -411,7 +412,6 @@ struct mv643xx_eth_private {
 	u8 work_rx_refill;
 
 	int skb_size;
-	struct sk_buff_head rx_recycle;
 
 	/*
 	 * RX state.
@@ -431,6 +431,14 @@ struct mv643xx_eth_private {
 	int tx_desc_sram_size;
 	int txq_count;
 	struct tx_queue txq[8];
+
+	/*
+	 * Hardware-specific parameters.
+	 */
+#if defined(CONFIG_HAVE_CLK)
+	struct clk *clk;
+#endif
+	unsigned int t_clk;
 };
 
 
@@ -664,9 +672,7 @@ static int rxq_refill(struct rx_queue *rxq, int budget)
 		struct rx_desc *rx_desc;
 		int size;
 
-		skb = __skb_dequeue(&mp->rx_recycle);
-		if (skb == NULL)
-			skb = netdev_alloc_skb(mp->dev, mp->skb_size);
+		skb = netdev_alloc_skb(mp->dev, mp->skb_size);
 
 		if (skb == NULL) {
 			mp->oom = 1;
@@ -980,14 +986,7 @@ static int txq_reclaim(struct tx_queue *txq, int budget, int force)
 				       desc->byte_cnt, DMA_TO_DEVICE);
 		}
 
-		if (skb != NULL) {
-			if (skb_queue_len(&mp->rx_recycle) <
-					mp->rx_ring_size &&
-			    skb_recycle_check(skb, mp->skb_size))
-				__skb_queue_head(&mp->rx_recycle, skb);
-			else
-				dev_kfree_skb(skb);
-		}
+		dev_kfree_skb(skb);
 	}
 
 	__netif_tx_unlock(nq);
@@ -1010,7 +1009,7 @@ static void tx_set_rate(struct mv643xx_eth_private *mp, int rate, int burst)
 	int mtu;
 	int bucket_size;
 
-	token_rate = ((rate / 1000) * 64) / (mp->shared->t_clk / 1000);
+	token_rate = ((rate / 1000) * 64) / (mp->t_clk / 1000);
 	if (token_rate > 1023)
 		token_rate = 1023;
 
@@ -1042,7 +1041,7 @@ static void txq_set_rate(struct tx_queue *txq, int rate, int burst)
 	int token_rate;
 	int bucket_size;
 
-	token_rate = ((rate / 1000) * 64) / (mp->shared->t_clk / 1000);
+	token_rate = ((rate / 1000) * 64) / (mp->t_clk / 1000);
 	if (token_rate > 1023)
 		token_rate = 1023;
 
@@ -1309,7 +1308,7 @@ static unsigned int get_rx_coal(struct mv643xx_eth_private *mp)
 		temp = (val & 0x003fff00) >> 8;
 
 	temp *= 64000000;
-	do_div(temp, mp->shared->t_clk);
+	do_div(temp, mp->t_clk);
 
 	return (unsigned int)temp;
 }
@@ -1319,7 +1318,7 @@ static void set_rx_coal(struct mv643xx_eth_private *mp, unsigned int usec)
 	u64 temp;
 	u32 val;
 
-	temp = (u64)usec * mp->shared->t_clk;
+	temp = (u64)usec * mp->t_clk;
 	temp += 31999999;
 	do_div(temp, 64000000);
 
@@ -1345,7 +1344,7 @@ static unsigned int get_tx_coal(struct mv643xx_eth_private *mp)
 
 	temp = (rdlp(mp, TX_FIFO_URGENT_THRESHOLD) & 0x3fff0) >> 4;
 	temp *= 64000000;
-	do_div(temp, mp->shared->t_clk);
+	do_div(temp, mp->t_clk);
 
 	return (unsigned int)temp;
 }
@@ -1354,7 +1353,7 @@ static void set_tx_coal(struct mv643xx_eth_private *mp, unsigned int usec)
 {
 	u64 temp;
 
-	temp = (u64)usec * mp->shared->t_clk;
+	temp = (u64)usec * mp->t_clk;
 	temp += 31999999;
 	do_div(temp, 64000000);
 
@@ -1665,6 +1664,7 @@ static const struct ethtool_ops mv643xx_eth_ethtool_ops = {
 	.get_strings		= mv643xx_eth_get_strings,
 	.get_ethtool_stats	= mv643xx_eth_get_ethtool_stats,
 	.get_sset_count		= mv643xx_eth_get_sset_count,
+	.get_ts_info		= ethtool_op_get_ts_info,
 };
 
 
@@ -1886,7 +1886,7 @@ static int rxq_init(struct mv643xx_eth_private *mp, int index)
 		goto out_free;
 	}
 
-	rx_desc = (struct rx_desc *)rxq->rx_desc_area;
+	rx_desc = rxq->rx_desc_area;
 	for (i = 0; i < rxq->rx_ring_size; i++) {
 		int nexti;
 
@@ -1991,7 +1991,7 @@ static int txq_init(struct mv643xx_eth_private *mp, int index)
 
 	txq->tx_desc_area_size = size;
 
-	tx_desc = (struct tx_desc *)txq->tx_desc_area;
+	tx_desc = txq->tx_desc_area;
 	for (i = 0; i < txq->tx_ring_size; i++) {
 		struct tx_desc *txd = tx_desc + i;
 		int nexti;
@@ -2339,8 +2339,6 @@ static int mv643xx_eth_open(struct net_device *dev)
 
 	napi_enable(&mp->napi);
 
-	skb_queue_head_init(&mp->rx_recycle);
-
 	mp->int_mask = INT_EXT;
 
 	for (i = 0; i < mp->rxq_count; i++) {
@@ -2434,8 +2432,6 @@ static int mv643xx_eth_stop(struct net_device *dev)
 	mv643xx_eth_get_stats(dev);
 	mib_counters_update(mp);
 	del_timer_sync(&mp->mib_counters_timer);
-
-	skb_queue_purge(&mp->rx_recycle);
 
 	for (i = 0; i < mp->rxq_count; i++)
 		rxq_deinit(mp->rxq + i);
@@ -2662,10 +2658,6 @@ static int mv643xx_eth_shared_probe(struct platform_device *pdev)
 	if (dram)
 		mv643xx_eth_conf_mbus_windows(msp, dram);
 
-	/*
-	 * Detect hardware parameters.
-	 */
-	msp->t_clk = (pd != NULL && pd->t_clk != 0) ? pd->t_clk : 133000000;
 	msp->tx_csum_limit = (pd != NULL && pd->tx_csum_limit) ?
 					pd->tx_csum_limit : 9 * 1024;
 	infer_hw_params(msp);
@@ -2890,6 +2882,18 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 
 	mp->dev = dev;
 
+	/*
+	 * Start with a default rate, and if there is a clock, allow
+	 * it to override the default.
+	 */
+	mp->t_clk = 133000000;
+#if defined(CONFIG_HAVE_CLK)
+	mp->clk = clk_get(&pdev->dev, (pdev->id ? "1" : "0"));
+	if (!IS_ERR(mp->clk)) {
+		clk_prepare_enable(mp->clk);
+		mp->t_clk = clk_get_rate(mp->clk);
+	}
+#endif
 	set_params(mp, pd);
 	netif_set_real_num_tx_queues(dev, mp->txq_count);
 	netif_set_real_num_rx_queues(dev, mp->rxq_count);
@@ -2965,6 +2969,12 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	return 0;
 
 out:
+#if defined(CONFIG_HAVE_CLK)
+	if (!IS_ERR(mp->clk)) {
+		clk_disable_unprepare(mp->clk);
+		clk_put(mp->clk);
+	}
+#endif
 	free_netdev(dev);
 
 	return err;
@@ -2978,6 +2988,14 @@ static int mv643xx_eth_remove(struct platform_device *pdev)
 	if (mp->phy != NULL)
 		phy_detach(mp->phy);
 	cancel_work_sync(&mp->tx_timeout_task);
+
+#if defined(CONFIG_HAVE_CLK)
+	if (!IS_ERR(mp->clk)) {
+		clk_disable_unprepare(mp->clk);
+		clk_put(mp->clk);
+	}
+#endif
+
 	free_netdev(mp->dev);
 
 	platform_set_drvdata(pdev, NULL);

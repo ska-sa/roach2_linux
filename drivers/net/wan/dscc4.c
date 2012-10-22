@@ -774,13 +774,14 @@ static int __devinit dscc4_init_one(struct pci_dev *pdev,
 	}
 	/* Global interrupt queue */
 	writel((u32)(((IRQ_RING_SIZE >> 5) - 1) << 20), ioaddr + IQLENR1);
+
+	rc = -ENOMEM;
+
 	priv->iqcfg = (__le32 *) pci_alloc_consistent(pdev,
 		IRQ_RING_SIZE*sizeof(__le32), &priv->iqcfg_dma);
 	if (!priv->iqcfg)
 		goto err_free_irq_5;
 	writel(priv->iqcfg_dma, ioaddr + IQCFG);
-
-	rc = -ENOMEM;
 
 	/*
 	 * SCC 0-3 private rx/tx irq structures
@@ -2055,15 +2056,4 @@ static struct pci_driver dscc4_driver = {
 	.remove		= __devexit_p(dscc4_remove_one),
 };
 
-static int __init dscc4_init_module(void)
-{
-	return pci_register_driver(&dscc4_driver);
-}
-
-static void __exit dscc4_cleanup_module(void)
-{
-	pci_unregister_driver(&dscc4_driver);
-}
-
-module_init(dscc4_init_module);
-module_exit(dscc4_cleanup_module);
+module_pci_driver(dscc4_driver);

@@ -188,21 +188,13 @@ static int labpc_cs_attach(struct pcmcia_device *link)
 
 static void labpc_cs_detach(struct pcmcia_device *link)
 {
-	dev_dbg(&link->dev, "labpc_cs_detach\n");
-
-	/*
-	   If the device is currently configured and active, we won't
-	   actually delete it yet.  Instead, it is marked so that when
-	   the release() function is called, that will trigger a proper
-	   detach().
-	 */
 	((struct local_info_t *)link->priv)->stop = 1;
 	labpc_release(link);
 
 	/* This points to the parent local_info_t struct (may be null) */
 	kfree(link->priv);
 
-}				/* labpc_cs_detach */
+}
 
 static int labpc_pcmcia_config_loop(struct pcmcia_device *p_dev,
 				void *priv_data)
@@ -278,7 +270,7 @@ MODULE_AUTHOR("Frank Mori Hess <fmhess@users.sourceforge.net>");
 MODULE_DESCRIPTION("Comedi driver for National Instruments Lab-PC");
 MODULE_LICENSE("GPL");
 
-struct pcmcia_driver labpc_cs_driver = {
+static struct pcmcia_driver labpc_cs_driver = {
 	.probe = labpc_cs_attach,
 	.remove = labpc_cs_detach,
 	.suspend = labpc_cs_suspend,
@@ -299,7 +291,7 @@ static void __exit exit_labpc_cs(void)
 	pcmcia_unregister_driver(&labpc_cs_driver);
 }
 
-int __init labpc_init_module(void)
+static int __init labpc_init_module(void)
 {
 	int ret;
 
@@ -310,7 +302,7 @@ int __init labpc_init_module(void)
 	return comedi_driver_register(&driver_labpc_cs);
 }
 
-void __exit labpc_exit_module(void)
+static void __exit labpc_exit_module(void)
 {
 	exit_labpc_cs();
 	comedi_driver_unregister(&driver_labpc_cs);

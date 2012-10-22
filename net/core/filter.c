@@ -38,6 +38,7 @@
 #include <linux/filter.h>
 #include <linux/reciprocal_div.h>
 #include <linux/ratelimit.h>
+#include <linux/seccomp.h>
 
 /* No hurry in this branch
  *
@@ -81,6 +82,14 @@ int sk_filter(struct sock *sk, struct sk_buff *skb)
 {
 	int err;
 	struct sk_filter *filter;
+
+	/*
+	 * If the skb was allocated from pfmemalloc reserves, only
+	 * allow SOCK_MEMALLOC sockets to use it as this socket is
+	 * helping free memory
+	 */
+	if (skb_pfmemalloc(skb) && !sock_flag(sk, SOCK_MEMALLOC))
+		return -ENOMEM;
 
 	err = security_sock_rcv_skb(sk, skb);
 	if (err)
@@ -158,6 +167,14 @@ unsigned int sk_run_filter(const struct sk_buff *skb,
 		case BPF_S_ALU_DIV_K:
 			A = reciprocal_divide(A, K);
 			continue;
+		case BPF_S_ALU_MOD_X:
+			if (X == 0)
+				return 0;
+			A %= X;
+			continue;
+		case BPF_S_ALU_MOD_K:
+			A %= K;
+			continue;
 		case BPF_S_ALU_AND_X:
 			A &= X;
 			continue;
@@ -169,6 +186,13 @@ unsigned int sk_run_filter(const struct sk_buff *skb,
 			continue;
 		case BPF_S_ALU_OR_K:
 			A |= K;
+			continue;
+		case BPF_S_ANC_ALU_XOR_X:
+		case BPF_S_ALU_XOR_X:
+			A ^= X;
+			continue;
+		case BPF_S_ALU_XOR_K:
+			A ^= K;
 			continue;
 		case BPF_S_ALU_LSH_X:
 			A <<= X;
@@ -352,6 +376,11 @@ load_b:
 				A = 0;
 			continue;
 		}
+#ifdef CONFIG_SECCOMP_FILTER
+		case BPF_S_ANC_SECCOMP_LD_W:
+			A = seccomp_bpf_load(fentry->k);
+			continue;
+#endif
 		default:
 			WARN_RATELIMIT(1, "Unknown code:%u jt:%u tf:%u k:%u\n",
 				       fentry->code, fentry->jt,
@@ -452,10 +481,14 @@ int sk_chk_filter(struct sock_filter *filter, unsigned int flen)
 		[BPF_ALU|BPF_MUL|BPF_K]  = BPF_S_ALU_MUL_K,
 		[BPF_ALU|BPF_MUL|BPF_X]  = BPF_S_ALU_MUL_X,
 		[BPF_ALU|BPF_DIV|BPF_X]  = BPF_S_ALU_DIV_X,
+		[BPF_ALU|BPF_MOD|BPF_K]  = BPF_S_ALU_MOD_K,
+		[BPF_ALU|BPF_MOD|BPF_X]  = BPF_S_ALU_MOD_X,
 		[BPF_ALU|BPF_AND|BPF_K]  = BPF_S_ALU_AND_K,
 		[BPF_ALU|BPF_AND|BPF_X]  = BPF_S_ALU_AND_X,
 		[BPF_ALU|BPF_OR|BPF_K]   = BPF_S_ALU_OR_K,
 		[BPF_ALU|BPF_OR|BPF_X]   = BPF_S_ALU_OR_X,
+		[BPF_ALU|BPF_XOR|BPF_K]  = BPF_S_ALU_XOR_K,
+		[BPF_ALU|BPF_XOR|BPF_X]  = BPF_S_ALU_XOR_X,
 		[BPF_ALU|BPF_LSH|BPF_K]  = BPF_S_ALU_LSH_K,
 		[BPF_ALU|BPF_LSH|BPF_X]  = BPF_S_ALU_LSH_X,
 		[BPF_ALU|BPF_RSH|BPF_K]  = BPF_S_ALU_RSH_K,
@@ -514,6 +547,11 @@ int sk_chk_filter(struct sock_filter *filter, unsigned int flen)
 				return -EINVAL;
 			ftest->k = reciprocal_value(ftest->k);
 			break;
+		case BPF_S_ALU_MOD_K:
+			/* check for division by zero */
+			if (ftest->k == 0)
+				return -EINVAL;
+			break;
 		case BPF_S_LD_MEM:
 		case BPF_S_LDX_MEM:
 		case BPF_S_ST:
@@ -528,7 +566,7 @@ int sk_chk_filter(struct sock_filter *filter, unsigned int flen)
 			 * Compare this with conditional jumps below,
 			 * where offsets are limited. --ANK (981016)
 			 */
-			if (ftest->k >= (unsigned)(flen-pc-1))
+			if (ftest->k >= (unsigned int)(flen-pc-1))
 				return -EINVAL;
 			break;
 		case BPF_S_JMP_JEQ_K:
@@ -561,6 +599,7 @@ int sk_chk_filter(struct sock_filter *filter, unsigned int flen)
 			ANCILLARY(HATYPE);
 			ANCILLARY(RXHASH);
 			ANCILLARY(CPU);
+			ANCILLARY(ALU_XOR_X);
 			}
 		}
 		ftest->code = code;
@@ -588,6 +627,67 @@ void sk_filter_release_rcu(struct rcu_head *rcu)
 	kfree(fp);
 }
 EXPORT_SYMBOL(sk_filter_release_rcu);
+
+static int __sk_prepare_filter(struct sk_filter *fp)
+{
+	int err;
+
+	fp->bpf_func = sk_run_filter;
+
+	err = sk_chk_filter(fp->insns, fp->len);
+	if (err)
+		return err;
+
+	bpf_jit_compile(fp);
+	return 0;
+}
+
+/**
+ *	sk_unattached_filter_create - create an unattached filter
+ *	@fprog: the filter program
+ *	@pfp: the unattached filter that is created
+ *
+ * Create a filter independent of any socket. We first run some
+ * sanity checks on it to make sure it does not explode on us later.
+ * If an error occurs or there is insufficient memory for the filter
+ * a negative errno code is returned. On success the return is zero.
+ */
+int sk_unattached_filter_create(struct sk_filter **pfp,
+				struct sock_fprog *fprog)
+{
+	struct sk_filter *fp;
+	unsigned int fsize = sizeof(struct sock_filter) * fprog->len;
+	int err;
+
+	/* Make sure new filter is there and in the right amounts. */
+	if (fprog->filter == NULL)
+		return -EINVAL;
+
+	fp = kmalloc(fsize + sizeof(*fp), GFP_KERNEL);
+	if (!fp)
+		return -ENOMEM;
+	memcpy(fp->insns, fprog->filter, fsize);
+
+	atomic_set(&fp->refcnt, 1);
+	fp->len = fprog->len;
+
+	err = __sk_prepare_filter(fp);
+	if (err)
+		goto free_mem;
+
+	*pfp = fp;
+	return 0;
+free_mem:
+	kfree(fp);
+	return err;
+}
+EXPORT_SYMBOL_GPL(sk_unattached_filter_create);
+
+void sk_unattached_filter_destroy(struct sk_filter *fp)
+{
+	sk_filter_release(fp);
+}
+EXPORT_SYMBOL_GPL(sk_unattached_filter_destroy);
 
 /**
  *	sk_attach_filter - attach a socket filter
@@ -619,15 +719,12 @@ int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 
 	atomic_set(&fp->refcnt, 1);
 	fp->len = fprog->len;
-	fp->bpf_func = sk_run_filter;
 
-	err = sk_chk_filter(fp->insns, fp->len);
+	err = __sk_prepare_filter(fp);
 	if (err) {
 		sk_filter_uncharge(sk, fp);
 		return err;
 	}
-
-	bpf_jit_compile(fp);
 
 	old_fp = rcu_dereference_protected(sk->sk_filter,
 					   sock_owned_by_user(sk));

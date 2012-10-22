@@ -23,6 +23,7 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/clockchips.h>
+#include <linux/export.h>
 
 #include <asm/mach/time.h>
 
@@ -176,6 +177,7 @@ static struct clock_event_device clkevt = {
 };
 
 void __iomem *at91_st_base;
+EXPORT_SYMBOL_GPL(at91_st_base);
 
 void __init at91rm9200_ioremap_st(u32 addr)
 {
@@ -195,7 +197,7 @@ void __init at91rm9200_timer_init(void)
 	at91_st_read(AT91_ST_SR);
 
 	/* Make IRQs happen for the system timer */
-	setup_irq(AT91_ID_SYS, &at91rm9200_timer_irq);
+	setup_irq(NR_IRQS_LEGACY + AT91_ID_SYS, &at91rm9200_timer_irq);
 
 	/* The 32KiHz "Slow Clock" (tick every 30517.58 nanoseconds) is used
 	 * directly for the clocksource and all clockevents, after adjusting

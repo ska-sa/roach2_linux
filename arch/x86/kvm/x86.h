@@ -64,7 +64,7 @@ static inline int is_pse(struct kvm_vcpu *vcpu)
 
 static inline int is_paging(struct kvm_vcpu *vcpu)
 {
-	return kvm_read_cr0_bits(vcpu, X86_CR0_PG);
+	return likely(kvm_read_cr0_bits(vcpu, X86_CR0_PG));
 }
 
 static inline u32 bit(int bitno)
@@ -124,4 +124,5 @@ int kvm_write_guest_virt_system(struct x86_emulate_ctxt *ctxt,
 
 extern u64 host_xcr0;
 
+extern struct static_key kvm_no_apic_vcpu;
 #endif
