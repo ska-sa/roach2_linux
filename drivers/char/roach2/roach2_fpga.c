@@ -545,8 +545,10 @@ static int roach_mem_mmap(struct file *file, struct vm_area_struct *vma)
         printk(KERN_NOTICE "%s: pos to be converted : %lx", __func__, pos);
 
 
-        /* TODO: Find VM_RESERVED*/
-        //vma->vm_flags |= VM_RESERVED;   /* avoid to swap out this VMA */
+        /* Avoid to swap out this VMA */
+        /* vma->vm_flags |= VM_RESERVED; */
+        /* VM_RESERVED replacement with VM_IO that accounts as reserved_vm */
+        vma->vm_flags |= VM_IO;
 
 
         /* Page caching disabled completely for memory mapping to work properly*/

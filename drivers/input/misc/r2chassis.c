@@ -62,7 +62,7 @@ static void  r2case_toggle_leds(int code, int value)
         int pin = (-1);
         int actual;
 
-        printk(KERN_INFO "attempting led toggle");                                                                            
+        printk(KERN_DEBUG "attempting led toggle");                                                                            
 
         if (code == LED_MISC) { 
                 pin = green_pin;
@@ -187,7 +187,7 @@ static int __devinit r2case_probe(struct platform_device *ofdev)
                 goto err_free_irq;
         }
 
-        printk(KERN_INFO "%s: init successful\n", __func__);
+        printk(KERN_DEBUG "%s: init successful\n", __func__);
 
         return 0;
 
