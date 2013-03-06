@@ -1,14 +1,4 @@
-/*
- * include/asm-xtensa/unistd.h
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file "COPYING" in the main directory of this archive
- * for more details.
- *
- * Copyright (C) 2001 - 2012 Tensilica Inc.
- */
-
-#ifndef _UAPI_XTENSA_UNISTD_H
+#if !defined(_UAPI_XTENSA_UNISTD_H) || defined(__SYSCALL)
 #define _UAPI_XTENSA_UNISTD_H
 
 #ifndef __SYSCALL
@@ -270,9 +260,9 @@ __SYSCALL(115, sys_sendmmsg, 4)
 /* Process Operations */
 
 #define __NR_clone 				116
-__SYSCALL(116, xtensa_clone, 5)
+__SYSCALL(116, sys_clone, 5)
 #define __NR_execve 				117
-__SYSCALL(117, xtensa_execve, 3)
+__SYSCALL(117, sys_execve, 3)
 #define __NR_exit 				118
 __SYSCALL(118, sys_exit, 1)
 #define __NR_exit_group 			119
@@ -493,7 +483,7 @@ __SYSCALL(222, sys_ni_syscall, 0)
 #define __NR_restart_syscall 			223
 __SYSCALL(223, sys_restart_syscall, 0)
 #define __NR_sigaltstack 			224
-__SYSCALL(224, xtensa_sigaltstack, 2)
+__SYSCALL(224, sys_sigaltstack, 2)
 #define __NR_rt_sigreturn 			225
 __SYSCALL(225, xtensa_rt_sigreturn, 1)
 #define __NR_rt_sigaction 			226
@@ -738,8 +728,13 @@ __SYSCALL(330, sys_prlimit64, 4)
 #define __NR_kcmp				331
 __SYSCALL(331, sys_kcmp, 5)
 
+#define __NR_finit_module			332
+__SYSCALL(332, sys_finit_module, 3)
 
-#define __NR_syscall_count			332
+#define __NR_accept4				333
+__SYSCALL(333, sys_accept4, 4)
+
+#define __NR_syscall_count			334
 
 /*
  * sysxtensa syscall handler
@@ -758,5 +753,7 @@ __SYSCALL(331, sys_kcmp, 5)
 #define SYS_XTENSA_ATOMIC_CMP_SWP         4     /* compare and swap */
 
 #define SYS_XTENSA_COUNT                  5     /* count */
+
+#undef __SYSCALL
 
 #endif /* _UAPI_XTENSA_UNISTD_H */

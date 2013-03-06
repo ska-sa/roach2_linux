@@ -48,7 +48,6 @@
 #include <xen/xenbus.h>
 #include <xen/xen.h>
 #include "xenbus_comms.h"
-#include <asm/xen/hypervisor.h>
 
 struct xs_stored_msg {
 	struct list_head list;
@@ -627,6 +626,7 @@ static struct xenbus_watch *find_watch(const char *token)
  */
 static bool xen_strict_xenbus_quirk(void)
 {
+#ifdef CONFIG_X86
 	uint32_t eax, ebx, ecx, edx, base;
 
 	base = xen_cpuid_base();
@@ -634,6 +634,7 @@ static bool xen_strict_xenbus_quirk(void)
 
 	if ((eax >> 16) < 4)
 		return true;
+#endif
 	return false;
 
 }
