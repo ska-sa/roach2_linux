@@ -127,7 +127,7 @@ static irqreturn_t r2chassis_interrupt(int irq,  void *data)
 }
 
 
-static int __devinit r2case_probe(struct platform_device *ofdev)
+static int r2case_probe(struct platform_device *ofdev)
 {
         
         int i,err;
@@ -201,7 +201,7 @@ err_free_dev:
 
 }
 
-static int __devexit r2case_remove(struct platform_device *ofdev)
+static int r2case_remove(struct platform_device *ofdev)
 {
         free_irq(r2chassis_irq, r2chassis_interrupt);
         input_unregister_device(r2case);
@@ -209,7 +209,7 @@ static int __devexit r2case_remove(struct platform_device *ofdev)
         return 0;
 }
 
-static const struct of_device_id __devinitconst r2case_platform_match[] =
+static const struct of_device_id r2case_platform_match[] =
 {
         {
                 .compatible     = "kat,r2chassis",

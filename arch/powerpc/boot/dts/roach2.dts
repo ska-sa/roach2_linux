@@ -26,6 +26,8 @@
     ethernet0 = &EMAC0;
     serial0 = &UART0;
     serial1 = &UART1;
+    serial2 = &UART2;
+    serial3 = &UART3;
   };
 
   cpus {
@@ -217,6 +219,28 @@
          current-speed = <0>;
          interrupt-parent = <&UIC0>;
          interrupts = <0x1 0x4>;
+      };
+
+      UART2: serial@ef600500 {
+           device_type = "serial";
+           compatible = "ns16550";
+           reg = <0xef600500 0x00000008>;
+           virtual-reg = <0xef600500>;
+           clock-frequency = <0>; /* Filled in by zImage */
+           current-speed = <115200>;
+           interrupt-parent = <&UIC1>;
+           interrupts = <0x3 0x4>;
+         };
+
+      UART3: serial@ef600600 {
+         device_type = "serial";
+         compatible = "ns16550";
+         reg = <0xef600600 0x00000008>;
+         virtual-reg = <0xef600600>;
+         clock-frequency = <0>;
+         current-speed = <0>;
+         interrupt-parent = <&UIC1>;
+         interrupts = <0x4 0x4>;
       };
 
       IIC0: i2c@ef600700 {

@@ -34,12 +34,15 @@
 #include <linux/gpio.h>
 #include <linux/mm.h>
 
+
 #include <asm/uaccess.h>  
 
+#ifdef CONFIG_OF
 /* For open firmware. */
-#include <linux/of.h>
+//#include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
+#endif
 
 #include "roach2_fpga.h"        /* local definitions */
 #define DRIVER_NAME "roach2_fpga"
@@ -641,7 +644,7 @@ out:
         return err;
 }
 
-static int __devinit r2fpga_setup(struct device *dev, const struct resource *res)
+static int r2fpga_setup(struct device *dev, const struct resource *res)
 {
         dev_t devt;
         struct fpga_device *fdev = NULL;
@@ -791,7 +794,7 @@ out_free_mutex:
 
 }
 
-static int __devexit r2fpga_remove(struct device *dev)
+static int r2fpga_remove(struct device *dev)
 {
         struct fpga_device *drvdata;
 
@@ -824,7 +827,7 @@ static int __devexit r2fpga_remove(struct device *dev)
 
 
 #ifdef CONFIG_OF
-static int __devinit r2fpga_of_probe(struct platform_device *op)
+static int r2fpga_of_probe(struct platform_device *op)
 {
         struct resource res;
         const char *family;
@@ -853,9 +856,9 @@ static inline int r2fpga_of_probe(struct platform_device *op)
 #endif /* CONFIG_OF */
 
 
-static const struct of_device_id __devinitconst r2fpga_of_match[];
+static const struct of_device_id r2fpga_of_match[];
 
-static int __devinit r2fpga_drv_probe(struct platform_device *pdev)
+static int r2fpga_drv_probe(struct platform_device *pdev)
 {
         const struct of_device_id *match;
         struct resource *res;
@@ -872,7 +875,7 @@ static int __devinit r2fpga_drv_probe(struct platform_device *pdev)
 
 }
 
-static int __devexit r2fpga_drv_remove(struct platform_device *pdev)
+static int r2fpga_drv_remove(struct platform_device *pdev)
 {
         return r2fpga_remove(&pdev->dev);
 
@@ -880,7 +883,7 @@ static int __devexit r2fpga_drv_remove(struct platform_device *pdev)
 
 #ifdef CONFIG_OF
 /* Match table for device tree binding */
-static const struct of_device_id __devinitconst r2fpga_of_match[] = {
+static const struct of_device_id r2fpga_of_match[] = {
         { 
         .type = "fpga", 
         .compatible = "kat,roach2-fpga", 
@@ -894,7 +897,7 @@ MODULE_DEVICE_TABLE(of, r2fpga_of_match);
 
 static struct platform_driver r2fpga_platform_driver = {
         .probe          = r2fpga_drv_probe,
-        .remove         = __devexit_p(r2fpga_drv_remove),
+        .remove         = r2fpga_drv_remove,
         .driver         = {
                 .name           = DRIVER_NAME,
                 .of_match_table = r2fpga_of_match,
