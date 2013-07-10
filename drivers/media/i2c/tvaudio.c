@@ -1761,7 +1761,7 @@ static int tvaudio_s_routing(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int tvaudio_s_tuner(struct v4l2_subdev *sd, struct v4l2_tuner *vt)
+static int tvaudio_s_tuner(struct v4l2_subdev *sd, const struct v4l2_tuner *vt)
 {
 	struct CHIPSTATE *chip = to_state(sd);
 	struct CHIPDESC *desc = chip->desc;
@@ -1803,7 +1803,7 @@ static int tvaudio_g_tuner(struct v4l2_subdev *sd, struct v4l2_tuner *vt)
 
 	vt->audmode = chip->audmode;
 	vt->rxsubchans = desc->getrxsubchans(chip);
-	vt->capability = V4L2_TUNER_CAP_STEREO |
+	vt->capability |= V4L2_TUNER_CAP_STEREO |
 		V4L2_TUNER_CAP_LANG1 | V4L2_TUNER_CAP_LANG2;
 
 	return 0;
@@ -1817,7 +1817,7 @@ static int tvaudio_s_std(struct v4l2_subdev *sd, v4l2_std_id std)
 	return 0;
 }
 
-static int tvaudio_s_frequency(struct v4l2_subdev *sd, struct v4l2_frequency *freq)
+static int tvaudio_s_frequency(struct v4l2_subdev *sd, const struct v4l2_frequency *freq)
 {
 	struct CHIPSTATE *chip = to_state(sd);
 	struct CHIPDESC *desc = chip->desc;
@@ -2020,7 +2020,8 @@ static int tvaudio_probe(struct i2c_client *client, const struct i2c_device_id *
 		/* start async thread */
 		chip->wt.function = chip_thread_wake;
 		chip->wt.data     = (unsigned long)chip;
-		chip->thread = kthread_run(chip_thread, chip, client->name);
+		chip->thread = kthread_run(chip_thread, chip, "%s",
+					   client->name);
 		if (IS_ERR(chip->thread)) {
 			v4l2_warn(sd, "failed to create kthread\n");
 			chip->thread = NULL;

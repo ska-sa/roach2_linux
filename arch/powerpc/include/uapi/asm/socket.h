@@ -79,4 +79,8 @@
 
 #define SO_LOCK_FILTER		44
 
+#define SO_SELECT_ERR_QUEUE	45
+
+#define SO_LL			46
+
 #endif	/* _ASM_POWERPC_SOCKET_H */

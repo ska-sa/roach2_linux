@@ -26,17 +26,16 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/time.h>
-#include <linux/fsl/mxs-dma.h>
-#include <linux/pinctrl/consumer.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 #include <asm/mach-types.h>
-#include <mach/hardware.h>
-#include <mach/mxs.h>
 
 #include "mxs-saif.h"
+
+#define MXS_SET_ADDR	0x4
+#define MXS_CLR_ADDR	0x8
 
 static struct mxs_saif *mxs_saif[2];
 
@@ -369,7 +368,6 @@ static int mxs_saif_startup(struct snd_pcm_substream *substream,
 			   struct snd_soc_dai *cpu_dai)
 {
 	struct mxs_saif *saif = snd_soc_dai_get_drvdata(cpu_dai);
-	snd_soc_dai_set_dma_data(cpu_dai, substream, &saif->dma_param);
 
 	/* clear error status to 0 for each re-open */
 	saif->fifo_underrun = 0;
@@ -627,6 +625,10 @@ static struct snd_soc_dai_driver mxs_saif_dai = {
 	.ops = &mxs_saif_dai_ops,
 };
 
+static const struct snd_soc_component_driver mxs_saif_component = {
+	.name		= "mxs-saif",
+};
+
 static irqreturn_t mxs_saif_irq(int irq, void *dev_id)
 {
 	struct mxs_saif *saif = dev_id;
@@ -659,9 +661,8 @@ static irqreturn_t mxs_saif_irq(int irq, void *dev_id)
 static int mxs_saif_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
-	struct resource *iores, *dmares;
+	struct resource *iores;
 	struct mxs_saif *saif;
-	struct pinctrl *pinctrl;
 	int ret = 0;
 	struct device_node *master;
 
@@ -701,12 +702,6 @@ static int mxs_saif_probe(struct platform_device *pdev)
 
 	mxs_saif[saif->id] = saif;
 
-	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
-	if (IS_ERR(pinctrl)) {
-		ret = PTR_ERR(pinctrl);
-		return ret;
-	}
-
 	saif->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(saif->clk)) {
 		ret = PTR_ERR(saif->clk);
@@ -720,22 +715,6 @@ static int mxs_saif_probe(struct platform_device *pdev)
 	saif->base = devm_ioremap_resource(&pdev->dev, iores);
 	if (IS_ERR(saif->base))
 		return PTR_ERR(saif->base);
-
-	dmares = platform_get_resource(pdev, IORESOURCE_DMA, 0);
-	if (!dmares) {
-		/*
-		 * TODO: This is a temporary solution and should be changed
-		 * to use generic DMA binding later when the helplers get in.
-		 */
-		ret = of_property_read_u32(np, "fsl,saif-dma-channel",
-					   &saif->dma_param.chan_num);
-		if (ret) {
-			dev_err(&pdev->dev, "failed to get dma channel\n");
-			return ret;
-		}
-	} else {
-		saif->dma_param.chan_num = dmares->start;
-	}
 
 	saif->irq = platform_get_irq(pdev, 0);
 	if (saif->irq < 0) {
@@ -753,17 +732,10 @@ static int mxs_saif_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	saif->dma_param.chan_irq = platform_get_irq(pdev, 1);
-	if (saif->dma_param.chan_irq < 0) {
-		ret = saif->dma_param.chan_irq;
-		dev_err(&pdev->dev, "failed to get dma irq resource: %d\n",
-			ret);
-		return ret;
-	}
-
 	platform_set_drvdata(pdev, saif);
 
-	ret = snd_soc_register_dai(&pdev->dev, &mxs_saif_dai);
+	ret = snd_soc_register_component(&pdev->dev, &mxs_saif_component,
+					 &mxs_saif_dai, 1);
 	if (ret) {
 		dev_err(&pdev->dev, "register DAI failed\n");
 		return ret;
@@ -778,7 +750,7 @@ static int mxs_saif_probe(struct platform_device *pdev)
 	return 0;
 
 failed_pdev_alloc:
-	snd_soc_unregister_dai(&pdev->dev);
+	snd_soc_unregister_component(&pdev->dev);
 
 	return ret;
 }
@@ -786,7 +758,7 @@ failed_pdev_alloc:
 static int mxs_saif_remove(struct platform_device *pdev)
 {
 	mxs_pcm_platform_unregister(&pdev->dev);
-	snd_soc_unregister_dai(&pdev->dev);
+	snd_soc_unregister_component(&pdev->dev);
 
 	return 0;
 }

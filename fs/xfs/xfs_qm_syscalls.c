@@ -117,11 +117,11 @@ xfs_qm_scall_quotaoff(
 	}
 	if (flags & XFS_GQUOTA_ACCT) {
 		dqtype |= XFS_QMOPT_GQUOTA;
-		flags |= (XFS_OQUOTA_CHKD | XFS_OQUOTA_ENFD);
+		flags |= (XFS_GQUOTA_CHKD | XFS_GQUOTA_ENFD);
 		inactivate_flags |= XFS_GQUOTA_ACTIVE;
 	} else if (flags & XFS_PQUOTA_ACCT) {
 		dqtype |= XFS_QMOPT_PQUOTA;
-		flags |= (XFS_OQUOTA_CHKD | XFS_OQUOTA_ENFD);
+		flags |= (XFS_PQUOTA_CHKD | XFS_PQUOTA_ENFD);
 		inactivate_flags |= XFS_PQUOTA_ACTIVE;
 	}
 
@@ -335,14 +335,14 @@ xfs_qm_scall_quotaon(
 	 * quota acct on ondisk without m_qflags' knowing.
 	 */
 	if (((flags & XFS_UQUOTA_ACCT) == 0 &&
-	    (mp->m_sb.sb_qflags & XFS_UQUOTA_ACCT) == 0 &&
-	    (flags & XFS_UQUOTA_ENFD))
-	    ||
+	     (mp->m_sb.sb_qflags & XFS_UQUOTA_ACCT) == 0 &&
+	     (flags & XFS_UQUOTA_ENFD)) ||
+	    ((flags & XFS_GQUOTA_ACCT) == 0 &&
+	     (mp->m_sb.sb_qflags & XFS_GQUOTA_ACCT) == 0 &&
+	     (flags & XFS_GQUOTA_ENFD)) ||
 	    ((flags & XFS_PQUOTA_ACCT) == 0 &&
-	    (mp->m_sb.sb_qflags & XFS_PQUOTA_ACCT) == 0 &&
-	    (flags & XFS_GQUOTA_ACCT) == 0 &&
-	    (mp->m_sb.sb_qflags & XFS_GQUOTA_ACCT) == 0 &&
-	    (flags & XFS_OQUOTA_ENFD))) {
+	     (mp->m_sb.sb_qflags & XFS_PQUOTA_ACCT) == 0 &&
+	     (flags & XFS_PQUOTA_ENFD))) {
 		xfs_debug(mp,
 			"%s: Can't enforce without acct, flags=%x sbflags=%x\n",
 			__func__, flags, mp->m_sb.sb_qflags);
@@ -407,11 +407,11 @@ xfs_qm_scall_getqstat(
 	struct fs_quota_stat	*out)
 {
 	struct xfs_quotainfo	*q = mp->m_quotainfo;
-	struct xfs_inode	*uip, *gip;
-	bool                    tempuqip, tempgqip;
+	struct xfs_inode	*uip = NULL;
+	struct xfs_inode	*gip = NULL;
+	bool                    tempuqip = false;
+	bool                    tempgqip = false;
 
-	uip = gip = NULL;
-	tempuqip = tempgqip = false;
 	memset(out, 0, sizeof(fs_quota_stat_t));
 
 	out->qs_version = FS_QSTAT_VERSION;
@@ -472,15 +472,15 @@ xfs_qm_scall_getqstat(
  */
 int
 xfs_qm_scall_setqlim(
-	xfs_mount_t		*mp,
+	struct xfs_mount	*mp,
 	xfs_dqid_t		id,
 	uint			type,
 	fs_disk_quota_t		*newlim)
 {
 	struct xfs_quotainfo	*q = mp->m_quotainfo;
-	xfs_disk_dquot_t	*ddq;
-	xfs_dquot_t		*dqp;
-	xfs_trans_t		*tp;
+	struct xfs_disk_dquot	*ddq;
+	struct xfs_dquot	*dqp;
+	struct xfs_trans	*tp;
 	int			error;
 	xfs_qcnt_t		hard, soft;
 
@@ -489,31 +489,36 @@ xfs_qm_scall_setqlim(
 	if ((newlim->d_fieldmask & XFS_DQ_MASK) == 0)
 		return 0;
 
+	/*
+	 * We don't want to race with a quotaoff so take the quotaoff lock.
+	 * We don't hold an inode lock, so there's nothing else to stop
+	 * a quotaoff from happening.
+	 */
+	mutex_lock(&q->qi_quotaofflock);
+
+	/*
+	 * Get the dquot (locked) before we start, as we need to do a
+	 * transaction to allocate it if it doesn't exist. Once we have the
+	 * dquot, unlock it so we can start the next transaction safely. We hold
+	 * a reference to the dquot, so it's safe to do this unlock/lock without
+	 * it being reclaimed in the mean time.
+	 */
+	error = xfs_qm_dqget(mp, NULL, id, type, XFS_QMOPT_DQALLOC, &dqp);
+	if (error) {
+		ASSERT(error != ENOENT);
+		goto out_unlock;
+	}
+	xfs_dqunlock(dqp);
+
 	tp = xfs_trans_alloc(mp, XFS_TRANS_QM_SETQLIM);
 	error = xfs_trans_reserve(tp, 0, XFS_QM_SETQLIM_LOG_RES(mp),
 				  0, 0, XFS_DEFAULT_LOG_COUNT);
 	if (error) {
 		xfs_trans_cancel(tp, 0);
-		return (error);
+		goto out_rele;
 	}
 
-	/*
-	 * We don't want to race with a quotaoff so take the quotaoff lock.
-	 * (We don't hold an inode lock, so there's nothing else to stop
-	 * a quotaoff from happening). (XXXThis doesn't currently happen
-	 * because we take the vfslock before calling xfs_qm_sysent).
-	 */
-	mutex_lock(&q->qi_quotaofflock);
-
-	/*
-	 * Get the dquot (locked), and join it to the transaction.
-	 * Allocate the dquot if this doesn't exist.
-	 */
-	if ((error = xfs_qm_dqget(mp, NULL, id, type, XFS_QMOPT_DQALLOC, &dqp))) {
-		xfs_trans_cancel(tp, XFS_TRANS_ABORT);
-		ASSERT(error != ENOENT);
-		goto out_unlock;
-	}
+	xfs_dqlock(dqp);
 	xfs_trans_dqjoin(tp, dqp);
 	ddq = &dqp->q_core;
 
@@ -529,6 +534,7 @@ xfs_qm_scall_setqlim(
 	if (hard == 0 || hard >= soft) {
 		ddq->d_blk_hardlimit = cpu_to_be64(hard);
 		ddq->d_blk_softlimit = cpu_to_be64(soft);
+		xfs_dquot_set_prealloc_limits(dqp);
 		if (id == 0) {
 			q->qi_bhardlimit = hard;
 			q->qi_bsoftlimit = soft;
@@ -620,9 +626,10 @@ xfs_qm_scall_setqlim(
 	xfs_trans_log_dquot(tp, dqp);
 
 	error = xfs_trans_commit(tp, 0);
-	xfs_qm_dqrele(dqp);
 
- out_unlock:
+out_rele:
+	xfs_qm_dqrele(dqp);
+out_unlock:
 	mutex_unlock(&q->qi_quotaofflock);
 	return error;
 }
@@ -769,9 +776,12 @@ xfs_qm_scall_getquota(
 	 * gets turned off. No need to confuse the user level code,
 	 * so return zeroes in that case.
 	 */
-	if ((!XFS_IS_UQUOTA_ENFORCED(mp) && dqp->q_core.d_flags == XFS_DQ_USER) ||
-	    (!XFS_IS_OQUOTA_ENFORCED(mp) &&
-			(dqp->q_core.d_flags & (XFS_DQ_PROJ | XFS_DQ_GROUP)))) {
+	if ((!XFS_IS_UQUOTA_ENFORCED(mp) &&
+	     dqp->q_core.d_flags == XFS_DQ_USER) ||
+	    (!XFS_IS_GQUOTA_ENFORCED(mp) &&
+	     dqp->q_core.d_flags == XFS_DQ_GROUP) ||
+	    (!XFS_IS_PQUOTA_ENFORCED(mp) &&
+	     dqp->q_core.d_flags == XFS_DQ_PROJ)) {
 		dst->d_btimer = 0;
 		dst->d_itimer = 0;
 		dst->d_rtbtimer = 0;
@@ -779,8 +789,8 @@ xfs_qm_scall_getquota(
 
 #ifdef DEBUG
 	if (((XFS_IS_UQUOTA_ENFORCED(mp) && dst->d_flags == FS_USER_QUOTA) ||
-	     (XFS_IS_OQUOTA_ENFORCED(mp) &&
-			(dst->d_flags & (FS_PROJ_QUOTA | FS_GROUP_QUOTA)))) &&
+	     (XFS_IS_GQUOTA_ENFORCED(mp) && dst->d_flags == FS_GROUP_QUOTA) ||
+	     (XFS_IS_PQUOTA_ENFORCED(mp) && dst->d_flags == FS_PROJ_QUOTA)) &&
 	    dst->d_id != 0) {
 		if ((dst->d_bcount > dst->d_blk_softlimit) &&
 		    (dst->d_blk_softlimit > 0)) {
@@ -826,16 +836,16 @@ xfs_qm_export_flags(
 	uflags = 0;
 	if (flags & XFS_UQUOTA_ACCT)
 		uflags |= FS_QUOTA_UDQ_ACCT;
-	if (flags & XFS_PQUOTA_ACCT)
-		uflags |= FS_QUOTA_PDQ_ACCT;
 	if (flags & XFS_GQUOTA_ACCT)
 		uflags |= FS_QUOTA_GDQ_ACCT;
+	if (flags & XFS_PQUOTA_ACCT)
+		uflags |= FS_QUOTA_PDQ_ACCT;
 	if (flags & XFS_UQUOTA_ENFD)
 		uflags |= FS_QUOTA_UDQ_ENFD;
-	if (flags & (XFS_OQUOTA_ENFD)) {
-		uflags |= (flags & XFS_GQUOTA_ACCT) ?
-			FS_QUOTA_GDQ_ENFD : FS_QUOTA_PDQ_ENFD;
-	}
+	if (flags & XFS_GQUOTA_ENFD)
+		uflags |= FS_QUOTA_GDQ_ENFD;
+	if (flags & XFS_PQUOTA_ENFD)
+		uflags |= FS_QUOTA_PDQ_ENFD;
 	return (uflags);
 }
 

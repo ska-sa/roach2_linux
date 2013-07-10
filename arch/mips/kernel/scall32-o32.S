@@ -138,9 +138,18 @@ stackargs:
 5:	jr	t1
 	 sw	t5, 16(sp)		# argument #5 to ksp
 
+#ifdef CONFIG_CPU_MICROMIPS
+	sw	t8, 28(sp)		# argument #8 to ksp
+	nop
+	sw	t7, 24(sp)		# argument #7 to ksp
+	nop
+	sw	t6, 20(sp)		# argument #6 to ksp
+	nop
+#else
 	sw	t8, 28(sp)		# argument #8 to ksp
 	sw	t7, 24(sp)		# argument #7 to ksp
 	sw	t6, 20(sp)		# argument #6 to ksp
+#endif
 6:	j	stack_done		# go back
 	 nop
 	.set	pop
@@ -467,8 +476,9 @@ einval: li	v0, -ENOSYS
 	/*
 	 * For FPU affinity scheduling on MIPS MT processors, we need to
 	 * intercept sys_sched_xxxaffinity() calls until we get a proper hook
-	 * in kernel/sched.c.  Considered only temporary we only support these
-	 * hooks for the 32-bit kernel - there is no MIPS64 MT processor atm.
+	 * in kernel/sched/core.c.  Considered only temporary we only support
+	 * these hooks for the 32-bit kernel - there is no MIPS64 MT processor
+	 * atm.
 	 */
 	sys	mipsmt_sys_sched_setaffinity	3
 	sys	mipsmt_sys_sched_getaffinity	3

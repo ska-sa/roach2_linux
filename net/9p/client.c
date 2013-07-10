@@ -127,7 +127,7 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 	char *s;
 	int ret = 0;
 
-	clnt->proto_version = p9_proto_2000u;
+	clnt->proto_version = p9_proto_2000L;
 	clnt->msize = 8192;
 
 	if (!opts)
@@ -562,36 +562,19 @@ static int p9_check_zc_errors(struct p9_client *c, struct p9_req_t *req,
 
 	if (!p9_is_proto_dotl(c)) {
 		/* Error is reported in string format */
-		uint16_t len;
-		/* 7 = header size for RERROR, 2 is the size of string len; */
-		int inline_len = in_hdrlen - (7 + 2);
+		int len;
+		/* 7 = header size for RERROR; */
+		int inline_len = in_hdrlen - 7;
 
-		/* Read the size of error string */
-		err = p9pdu_readf(req->rc, c->proto_version, "w", &len);
-		if (err)
-			goto out_err;
-
-		ename = kmalloc(len + 1, GFP_NOFS);
-		if (!ename) {
-			err = -ENOMEM;
+		len =  req->rc->size - req->rc->offset;
+		if (len > (P9_ZC_HDR_SZ - 7)) {
+			err = -EFAULT;
 			goto out_err;
 		}
-		if (len <= inline_len) {
-			/* We have error in protocol buffer itself */
-			if (pdu_read(req->rc, ename, len)) {
-				err = -EFAULT;
-				goto out_free;
 
-			}
-		} else {
-			/*
-			 *  Part of the data is in user space buffer.
-			 */
-			if (pdu_read(req->rc, ename, inline_len)) {
-				err = -EFAULT;
-				goto out_free;
-
-			}
+		ename = &req->rc->sdata[req->rc->offset];
+		if (len > inline_len) {
+			/* We have error in external buffer */
 			if (kern_buf) {
 				memcpy(ename + inline_len, uidata,
 				       len - inline_len);
@@ -600,19 +583,19 @@ static int p9_check_zc_errors(struct p9_client *c, struct p9_req_t *req,
 						     uidata, len - inline_len);
 				if (err) {
 					err = -EFAULT;
-					goto out_free;
+					goto out_err;
 				}
 			}
 		}
-		ename[len] = 0;
-		if (p9_is_proto_dotu(c)) {
-			/* For dotu we also have error code */
-			err = p9pdu_readf(req->rc,
-					  c->proto_version, "d", &ecode);
-			if (err)
-				goto out_free;
+		ename = NULL;
+		err = p9pdu_readf(req->rc, c->proto_version, "s?d",
+				  &ename, &ecode);
+		if (err)
+			goto out_err;
+
+		if (p9_is_proto_dotu(c))
 			err = -ecode;
-		}
+
 		if (!err || !IS_ERR_VALUE(err)) {
 			err = p9_errstr2errno(ename, strlen(ename));
 
@@ -628,8 +611,6 @@ static int p9_check_zc_errors(struct p9_client *c, struct p9_req_t *req,
 	}
 	return err;
 
-out_free:
-	kfree(ename);
 out_err:
 	p9_debug(P9_DEBUG_ERROR, "couldn't parse error%d\n", err);
 	return err;
@@ -1013,6 +994,9 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 	err = parse_opts(options, clnt);
 	if (err < 0)
 		goto destroy_tagpool;
+
+	if (!clnt->trans_mod)
+		clnt->trans_mod = v9fs_get_trans_by_name("virtio");
 
 	if (!clnt->trans_mod)
 		clnt->trans_mod = v9fs_get_default_trans();
