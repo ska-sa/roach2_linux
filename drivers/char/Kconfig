@@ -424,6 +424,15 @@ config GPIO_TB0219
 	depends on TANBAC_TB022X
 	select GPIO_VR41XX
 
+config ROACH_FPGA
+        tristate "ROACH FPGA Access Driver"
+        depends on ROACH
+        help
+          This option enables support for low level FPGA access
+          memory mapped driver.
+
+          If unsure, say N.
+
 config ROACH2_FPGA
         tristate "ROACH2 FPGA Access Driver"
         depends on ROACH2

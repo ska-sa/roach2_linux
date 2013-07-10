@@ -63,4 +63,5 @@ js-rtc-y = rtc.o
 
 obj-$(CONFIG_TILE_SROM)		+= tile-srom.o
 obj-$(CONFIG_ROACH2_FPGA)       += roach2/
+obj-$(CONFIG_ROACH_FPGA)       += roach/
 

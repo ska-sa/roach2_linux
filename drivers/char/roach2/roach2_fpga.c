@@ -31,7 +31,7 @@
 #include <linux/kref.h>
 #include <linux/fs.h>
 #include <linux/io.h>
-#include <linux/gpio.h>
+#includ <linux/gpio.h>
 #include <linux/mm.h>
 
 

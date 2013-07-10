@@ -189,6 +189,14 @@ config ISS4xx
 	help
 	  This option enables support for the IBM ISS simulation environment
 
+config ROACH
+        bool "ROACH"
+        depends on 44x
+        default n
+        select 440EPX
+        help
+          This option enables support for the ROACH-1 board.
+
 config ROACH2
         bool "ROACH2"
         depends on 44x

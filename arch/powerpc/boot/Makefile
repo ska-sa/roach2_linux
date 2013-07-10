@@ -80,8 +80,8 @@ src-plat-$(CONFIG_40x) += fixed-head.S ep405.c cuboot-hotfoot.c \
 				cuboot-kilauea.c simpleboot.c \
 				virtex405-head.S virtex.c
 src-plat-$(CONFIG_44x) += treeboot-ebony.c cuboot-ebony.c treeboot-bamboo.c \
-				cuboot-bamboo.c cuboot-sam440ep.c \
-				cuboot-sequoia.c cuboot-rainier.c cuboot-roach2\
+				cuboot-bamboo.c cuboot-sam440ep.c cuboot-sequoia.c\
+				cuboot-rainier.c cuboot-roach.c cuboot-roach2.c\
 				cuboot-taishan.c cuboot-katmai.c \
 				cuboot-warp.c cuboot-yosemite.c \
 				treeboot-iss4xx.c treeboot-currituck.c \

@@ -11,4 +11,5 @@ obj-$(CONFIG_XILINX_ML510) += virtex_ml510.o
 obj-$(CONFIG_ISS4xx)	+= iss4xx.o
 obj-$(CONFIG_CANYONLANDS)+= canyonlands.o
 obj-$(CONFIG_CURRITUCK)	+= currituck.o
+obj-$(CONFIG_ROACH)	+= roach.o
 obj-$(CONFIG_ROACH2)	+= roach2.o
