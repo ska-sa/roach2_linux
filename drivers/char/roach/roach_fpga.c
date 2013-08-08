@@ -118,22 +118,22 @@ static int roach_cpld_configure(struct fpga_device *fdev)
 	 *  Set the FPGA to program mode, via the CPLD device
 	 */
 	out_8(fdev->cpld_virt + CPLD_SM_CTRL, 0x00);
-	udelay(50); // delay 1ms
+	//udelay(50); // delay 1ms
 	out_8(fdev->cpld_virt + CPLD_SM_OREGS, 0x03);
-	udelay(50); // delay 1ms
+	//udelay(50); // delay 1ms
 	for (i = 0; i < 32; i++) {           // Delay for at least 350ns
-		udelay(1); // delay 1us
+		//udelay(1); // delay 1us
 		out_8(fdev->cpld_virt + CPLD_SM_OREGS, 0x00);
 	}
-	udelay(50); // delay 1ms
+	//udelay(50); // delay 1ms
 	out_8(fdev->cpld_virt + CPLD_SM_OREGS, 0x03);
-	udelay(50); // delay 1ms
+	//udelay(50); // delay 1ms
 
 	printk(KERN_NOTICE "roach cpld about to poll");
 
 	/* Poll until init_n is enabled */
 	for (i = 0; i < SM_INITB_WAIT + 1; i++) {
-		udelay(50); // delay 1ms
+		//udelay(50); // delay 1ms
 		if (in_le32(fdev->cpld_virt + CPLD_SM_STATUS) & CPLD_SM_INIT_N) {
 			break;
 		}
@@ -265,7 +265,7 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
 	}
 
 	fdev->gw_bytes += have_written;
-	udelay(2000); // delay 2ms
+	//udelay(2000); // delay 2ms
 	/*
 	 * Wait for FPGA to signal that it is ready
 	 * Poll until done pin is enabled, or we get a timeout
@@ -277,7 +277,7 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
 		printk(KERN_NOTICE "roach done pin test");
 
 		for (i = 0; i < SM_INITB_WAIT + 1; i++) {
-			udelay(100); // delay 1ms
+			//udelay(100); // delay 1ms
 			if (in_8(fdev->cpld_virt + CPLD_SM_STATUS) & CPLD_SM_DONE) {
 				break;
 			}
