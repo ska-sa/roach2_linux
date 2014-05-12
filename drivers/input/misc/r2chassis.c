@@ -29,7 +29,7 @@ static int r2case_setup_gpios(void)
 
         np = of_find_compatible_node(NULL, NULL, "gpio-pins");                                                                         
         if (!np) { 
-                printk(KERN_ERR "unable to locate gpio interface");                                                                    
+                printk(KERN_ERR "unable to locate gpio interface\n");                                                                    
                 return -1;
         }
 
@@ -42,7 +42,7 @@ static int r2case_setup_gpios(void)
                 }
 
         if(green_pin == -1 || red_pin == -1){
-                printk(KERN_ERR "unable to locate gpio pins,cpu_rdy and cpu_err");                                                                    
+                printk(KERN_ERR "unable to locate gpio pins,cpu_rdy and cpu_err\n");                                                                    
                 return -1;
         }
 
@@ -62,17 +62,17 @@ static void  r2case_toggle_leds(int code, int value)
         int pin = (-1);
         int actual;
 
-        printk(KERN_DEBUG "attempting led toggle");                                                                            
+      //  printk(KERN_DEBUG "attempting led toggle\n");                                                                            
 
         if (code == LED_MISC) { 
                 pin = green_pin;
                 actual = value;
-                printk(KERN_DEBUG "About to toggle cpu_rdy pin");                                                                   
+                printk(KERN_DEBUG "About to toggle cpu_rdy pin\n");                                                                   
         }
         else { /*code = LED_SUSPEND)*/
                 pin = red_pin;
                 actual =  value;
-                printk(KERN_DEBUG "About to toggle cpu_err pin");                                                                   
+                printk(KERN_DEBUG "About to toggle cpu_err pin\n");                                                                   
         }
 
         gpio_set_value(pin, actual);                      
@@ -132,12 +132,12 @@ static int r2case_probe(struct platform_device *ofdev)
         
         int i,err;
 
-        printk(KERN_DEBUG "%s:node name:%s", __func__, ofdev->dev.of_node->full_name);
+        printk(KERN_DEBUG "%s:node name:%s\n", __func__, ofdev->dev.of_node->full_name);
 
 
         r2case = input_allocate_device();
         if(!r2case){
-                printk(KERN_ERR "%s(): Failed to allocate input device", __func__);
+                printk(KERN_ERR "%s(): Failed to allocate input device\n", __func__);
                 return -ENOMEM;
         }
 
@@ -165,7 +165,7 @@ static int r2case_probe(struct platform_device *ofdev)
 
         err = input_register_device(r2case);
         if(err){
-                printk(KERN_ERR "%s(): Failed to register input device", __func__);
+                printk(KERN_ERR "%s(): Failed to register input device\n", __func__);
                 goto err_free_dev;
         }
 

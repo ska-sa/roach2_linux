@@ -472,7 +472,7 @@ config INPUT_PWM_BEEPER
 
 config INPUT_R2CHASSIS
 	tristate "ROACH2 Chassis input device driver"
-	depends on GPIOLIB && GENERIC_GPIO
+	depends on GPIOLIB 
 	help
 	  Say Y here to get support for ROACH2 chassis input support.
 
