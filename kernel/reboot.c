@@ -32,7 +32,14 @@ EXPORT_SYMBOL(cad_pid);
 #endif
 enum reboot_mode reboot_mode DEFAULT_REBOOT_MODE;
 
-int reboot_default;
+/*
+ * This variable is used privately to keep track of whether or not
+ * reboot_type is still set to its default value (i.e., reboot= hasn't
+ * been set on the command line).  This is needed so that we can
+ * suppress DMI scanning for reboot quirks.  Without it, it's
+ * impossible to override a faulty reboot quirk without recompiling.
+ */
+int reboot_default = 1;
 int reboot_cpu;
 enum reboot_type reboot_type = BOOT_ACPI;
 int reboot_force;
@@ -97,7 +104,7 @@ int unregister_reboot_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL(unregister_reboot_notifier);
 
-static void migrate_to_reboot_cpu(void)
+void migrate_to_reboot_cpu(void)
 {
 	/* The boot cpu is always logical cpu 0 */
 	int cpu = reboot_cpu;
@@ -381,15 +388,22 @@ static int __init reboot_setup(char *str)
 			break;
 
 		case 's':
-			if (isdigit(*(str+1)))
-				reboot_cpu = simple_strtoul(str+1, NULL, 0);
-			else if (str[1] == 'm' && str[2] == 'p' &&
-							isdigit(*(str+3)))
-				reboot_cpu = simple_strtoul(str+3, NULL, 0);
-			else
+		{
+			int rc;
+
+			if (isdigit(*(str+1))) {
+				rc = kstrtoint(str+1, 0, &reboot_cpu);
+				if (rc)
+					return rc;
+			} else if (str[1] == 'm' && str[2] == 'p' &&
+				   isdigit(*(str+3))) {
+				rc = kstrtoint(str+3, 0, &reboot_cpu);
+				if (rc)
+					return rc;
+			} else
 				reboot_mode = REBOOT_SOFT;
 			break;
-
+		}
 		case 'g':
 			reboot_mode = REBOOT_GPIO;
 			break;

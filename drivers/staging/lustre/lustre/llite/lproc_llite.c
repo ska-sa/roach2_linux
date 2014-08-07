@@ -35,22 +35,18 @@
  */
 #define DEBUG_SUBSYSTEM S_LLITE
 
-#include <linux/version.h>
-#include <lustre_lite.h>
-#include <lprocfs_status.h>
+#include "../include/lustre_lite.h"
+#include "../include/lprocfs_status.h"
 #include <linux/seq_file.h>
-#include <obd_support.h>
+#include "../include/obd_support.h"
 
 #include "llite_internal.h"
+#include "vvp_internal.h"
 
-struct proc_dir_entry *proc_lustre_fs_root;
-
-#ifdef LPROCFS
 /* /proc/lustre/llite mount point registration */
-extern struct file_operations vvp_dump_pgcache_file_ops;
-struct file_operations ll_rw_extents_stats_fops;
-struct file_operations ll_rw_extents_stats_pp_fops;
-struct file_operations ll_rw_offset_stats_fops;
+static struct file_operations ll_rw_extents_stats_fops;
+static struct file_operations ll_rw_extents_stats_pp_fops;
+static struct file_operations ll_rw_offset_stats_fops;
 
 static int ll_blksize_seq_show(struct seq_file *m, void *v)
 {
@@ -86,7 +82,7 @@ static int ll_kbytestotal_seq_show(struct seq_file *m, void *v)
 		while (blk_size >>= 1)
 			result <<= 1;
 
-		rc = seq_printf(m, LPU64"\n", result);
+		rc = seq_printf(m, "%llu\n", result);
 	}
 	return rc;
 }
@@ -109,7 +105,7 @@ static int ll_kbytesfree_seq_show(struct seq_file *m, void *v)
 		while (blk_size >>= 1)
 			result <<= 1;
 
-		rc = seq_printf(m, LPU64"\n", result);
+		rc = seq_printf(m, "%llu\n", result);
 	}
 	return rc;
 }
@@ -132,7 +128,7 @@ static int ll_kbytesavail_seq_show(struct seq_file *m, void *v)
 		while (blk_size >>= 1)
 			result <<= 1;
 
-		rc = seq_printf(m, LPU64"\n", result);
+		rc = seq_printf(m, "%llu\n", result);
 	}
 	return rc;
 }
@@ -149,7 +145,7 @@ static int ll_filestotal_seq_show(struct seq_file *m, void *v)
 				cfs_time_shift_64(-OBD_STATFS_CACHE_SECONDS),
 				OBD_STATFS_NODELAY);
 	if (!rc)
-		 rc = seq_printf(m, LPU64"\n", osfs.os_files);
+		 rc = seq_printf(m, "%llu\n", osfs.os_files);
 	return rc;
 }
 LPROC_SEQ_FOPS_RO(ll_filestotal);
@@ -165,7 +161,7 @@ static int ll_filesfree_seq_show(struct seq_file *m, void *v)
 				cfs_time_shift_64(-OBD_STATFS_CACHE_SECONDS),
 				OBD_STATFS_NODELAY);
 	if (!rc)
-		 rc = seq_printf(m, LPU64"\n", osfs.os_ffree);
+		 rc = seq_printf(m, "%llu\n", osfs.os_ffree);
 	return rc;
 }
 LPROC_SEQ_FOPS_RO(ll_filesfree);
@@ -243,9 +239,9 @@ static ssize_t ll_max_readahead_mb_seq_write(struct file *file, const char *buff
 	if (rc)
 		return rc;
 
-	if (pages_number < 0 || pages_number > num_physpages / 2) {
+	if (pages_number < 0 || pages_number > totalram_pages / 2) {
 		CERROR("can't set file readahead more than %lu MB\n",
-		       num_physpages >> (20 - PAGE_CACHE_SHIFT + 1)); /*1/2 of RAM*/
+		       totalram_pages >> (20 - PAGE_CACHE_SHIFT + 1)); /*1/2 of RAM*/
 		return -ERANGE;
 	}
 
@@ -371,8 +367,9 @@ static int ll_max_cached_mb_seq_show(struct seq_file *m, void *v)
 			cache->ccc_lru_shrinkers);
 }
 
-static ssize_t ll_max_cached_mb_seq_write(struct file *file, const char *buffer,
-				      size_t count, loff_t *off)
+static ssize_t ll_max_cached_mb_seq_write(struct file *file,
+					  const char __user *buffer,
+					  size_t count, loff_t *off)
 {
 	struct super_block *sb = ((struct seq_file *)file->private_data)->private;
 	struct ll_sb_info *sbi = ll_s2sbi(sb);
@@ -380,23 +377,31 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file, const char *buffer,
 	int mult, rc, pages_number;
 	int diff = 0;
 	int nrpages = 0;
-	ENTRY;
+	char kernbuf[128];
+
+	if (count >= sizeof(kernbuf))
+		return -EINVAL;
+
+	if (copy_from_user(kernbuf, buffer, count))
+		return -EFAULT;
+	kernbuf[count] = 0;
 
 	mult = 1 << (20 - PAGE_CACHE_SHIFT);
-	buffer = lprocfs_find_named_value(buffer, "max_cached_mb:", &count);
+	buffer += lprocfs_find_named_value(kernbuf, "max_cached_mb:", &count) -
+		  kernbuf;
 	rc = lprocfs_write_frac_helper(buffer, count, &pages_number, mult);
 	if (rc)
-		RETURN(rc);
+		return rc;
 
-	if (pages_number < 0 || pages_number > num_physpages) {
+	if (pages_number < 0 || pages_number > totalram_pages) {
 		CERROR("%s: can't set max cache more than %lu MB\n",
 		       ll_get_fsname(sb, NULL, 0),
-		       num_physpages >> (20 - PAGE_CACHE_SHIFT));
-		RETURN(-ERANGE);
+		       totalram_pages >> (20 - PAGE_CACHE_SHIFT));
+		return -ERANGE;
 	}
 
 	if (sbi->ll_dt_exp == NULL)
-		RETURN(-ENODEV);
+		return -ENODEV;
 
 	spin_lock(&sbi->ll_lock);
 	diff = pages_number - cache->ccc_lru_max;
@@ -421,7 +426,7 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file, const char *buffer,
 				break;
 
 			nv = ov > diff ? ov - diff : 0;
-			rc = cfs_atomic_cmpxchg(&cache->ccc_lru_left, ov, nv);
+			rc = atomic_cmpxchg(&cache->ccc_lru_left, ov, nv);
 			if (likely(ov == rc)) {
 				diff -= ov - nv;
 				nrpages += ov - nv;
@@ -686,7 +691,7 @@ static ssize_t ll_lazystatfs_seq_write(struct file *file, const char *buffer,
 }
 LPROC_SEQ_FOPS(ll_lazystatfs);
 
-static int ll_maxea_size_seq_show(struct seq_file *m, void *v)
+static int ll_max_easize_seq_show(struct seq_file *m, void *v)
 {
 	struct super_block *sb = m->private;
 	struct ll_sb_info *sbi = ll_s2sbi(sb);
@@ -699,7 +704,52 @@ static int ll_maxea_size_seq_show(struct seq_file *m, void *v)
 
 	return seq_printf(m, "%u\n", ealen);
 }
-LPROC_SEQ_FOPS_RO(ll_maxea_size);
+LPROC_SEQ_FOPS_RO(ll_max_easize);
+
+static int ll_defult_easize_seq_show(struct seq_file *m, void *v)
+{
+	struct super_block *sb = m->private;
+	struct ll_sb_info *sbi = ll_s2sbi(sb);
+	unsigned int ealen;
+	int rc;
+
+	rc = ll_get_default_mdsize(sbi, &ealen);
+	if (rc)
+		return rc;
+
+	return seq_printf(m, "%u\n", ealen);
+}
+LPROC_SEQ_FOPS_RO(ll_defult_easize);
+
+static int ll_max_cookiesize_seq_show(struct seq_file *m, void *v)
+{
+	struct super_block *sb = m->private;
+	struct ll_sb_info *sbi = ll_s2sbi(sb);
+	unsigned int cookielen;
+	int rc;
+
+	rc = ll_get_max_cookiesize(sbi, &cookielen);
+	if (rc)
+		return rc;
+
+	return seq_printf(m, "%u\n", cookielen);
+}
+LPROC_SEQ_FOPS_RO(ll_max_cookiesize);
+
+static int ll_defult_cookiesize_seq_show(struct seq_file *m, void *v)
+{
+	struct super_block *sb = m->private;
+	struct ll_sb_info *sbi = ll_s2sbi(sb);
+	unsigned int cookielen;
+	int rc;
+
+	rc = ll_get_default_cookiesize(sbi, &cookielen);
+	if (rc)
+		return rc;
+
+	return seq_printf(m, "%u\n", cookielen);
+}
+LPROC_SEQ_FOPS_RO(ll_defult_cookiesize);
 
 static int ll_sbi_flags_seq_show(struct seq_file *m, void *v)
 {
@@ -725,40 +775,80 @@ static int ll_sbi_flags_seq_show(struct seq_file *m, void *v)
 }
 LPROC_SEQ_FOPS_RO(ll_sbi_flags);
 
+static int ll_xattr_cache_seq_show(struct seq_file *m, void *v)
+{
+	struct super_block *sb = m->private;
+	struct ll_sb_info *sbi = ll_s2sbi(sb);
+	int rc;
+
+	rc = seq_printf(m, "%u\n", sbi->ll_xattr_cache_enabled);
+
+	return rc;
+}
+
+static ssize_t ll_xattr_cache_seq_write(struct file *file, const char *buffer,
+					size_t count, loff_t *off)
+{
+	struct seq_file *seq = file->private_data;
+	struct super_block *sb = seq->private;
+	struct ll_sb_info *sbi = ll_s2sbi(sb);
+	int val, rc;
+
+	rc = lprocfs_write_helper(buffer, count, &val);
+	if (rc)
+		return rc;
+
+	if (val != 0 && val != 1)
+		return -ERANGE;
+
+	if (val == 1 && !(sbi->ll_flags & LL_SBI_XATTR_CACHE))
+		return -ENOTSUPP;
+
+	sbi->ll_xattr_cache_enabled = val;
+
+	return count;
+}
+LPROC_SEQ_FOPS(ll_xattr_cache);
+
 static struct lprocfs_vars lprocfs_llite_obd_vars[] = {
-	{ "uuid",	  &ll_sb_uuid_fops,	  0, 0 },
+	{ "uuid",	  &ll_sb_uuid_fops,	  NULL, 0 },
 	//{ "mntpt_path",   ll_rd_path,	     0, 0 },
-	{ "fstype",       &ll_fstype_fops,	  0, 0 },
-	{ "site",	  &ll_site_stats_fops,    0, 0 },
-	{ "blocksize",    &ll_blksize_fops,	  0, 0 },
-	{ "kbytestotal",  &ll_kbytestotal_fops,   0, 0 },
-	{ "kbytesfree",   &ll_kbytesfree_fops,    0, 0 },
-	{ "kbytesavail",  &ll_kbytesavail_fops,   0, 0 },
-	{ "filestotal",   &ll_filestotal_fops,    0, 0 },
-	{ "filesfree",    &ll_filesfree_fops,	  0, 0 },
-	{ "client_type",  &ll_client_type_fops,   0, 0 },
+	{ "fstype",       &ll_fstype_fops,	  NULL, 0 },
+	{ "site",	  &ll_site_stats_fops,    NULL, 0 },
+	{ "blocksize",    &ll_blksize_fops,	  NULL, 0 },
+	{ "kbytestotal",  &ll_kbytestotal_fops,   NULL, 0 },
+	{ "kbytesfree",   &ll_kbytesfree_fops,    NULL, 0 },
+	{ "kbytesavail",  &ll_kbytesavail_fops,   NULL, 0 },
+	{ "filestotal",   &ll_filestotal_fops,    NULL, 0 },
+	{ "filesfree",    &ll_filesfree_fops,	  NULL, 0 },
+	{ "client_type",  &ll_client_type_fops,   NULL, 0 },
 	//{ "filegroups",   lprocfs_rd_filegroups,  0, 0 },
-	{ "max_read_ahead_mb", &ll_max_readahead_mb_fops, 0 },
-	{ "max_read_ahead_per_file_mb", &ll_max_readahead_per_file_mb_fops, 0 },
-	{ "max_read_ahead_whole_mb", &ll_max_read_ahead_whole_mb_fops, 0 },
-	{ "max_cached_mb",    &ll_max_cached_mb_fops, 0 },
-	{ "checksum_pages",   &ll_checksum_fops, 0 },
-	{ "max_rw_chunk",     &ll_max_rw_chunk_fops, 0 },
-	{ "stats_track_pid",  &ll_track_pid_fops, 0 },
-	{ "stats_track_ppid", &ll_track_ppid_fops, 0 },
-	{ "stats_track_gid",  &ll_track_gid_fops, 0 },
-	{ "statahead_max",    &ll_statahead_max_fops, 0 },
-	{ "statahead_agl",    &ll_statahead_agl_fops, 0 },
-	{ "statahead_stats",  &ll_statahead_stats_fops, 0, 0 },
-	{ "lazystatfs",       &ll_lazystatfs_fops, 0 },
-	{ "max_easize",       &ll_maxea_size_fops, 0, 0 },
-	{ "sbi_flags",	      &ll_sbi_flags_fops, 0, 0 },
-	{ 0 }
+	{ "max_read_ahead_mb", &ll_max_readahead_mb_fops, NULL },
+	{ "max_read_ahead_per_file_mb", &ll_max_readahead_per_file_mb_fops,
+		NULL },
+	{ "max_read_ahead_whole_mb", &ll_max_read_ahead_whole_mb_fops, NULL },
+	{ "max_cached_mb",    &ll_max_cached_mb_fops, NULL },
+	{ "checksum_pages",   &ll_checksum_fops, NULL },
+	{ "max_rw_chunk",     &ll_max_rw_chunk_fops, NULL },
+	{ "stats_track_pid",  &ll_track_pid_fops, NULL },
+	{ "stats_track_ppid", &ll_track_ppid_fops, NULL },
+	{ "stats_track_gid",  &ll_track_gid_fops, NULL },
+	{ "statahead_max",    &ll_statahead_max_fops, NULL },
+	{ "statahead_agl",    &ll_statahead_agl_fops, NULL },
+	{ "statahead_stats",  &ll_statahead_stats_fops, NULL, 0 },
+	{ "lazystatfs",       &ll_lazystatfs_fops, NULL },
+	{ "max_easize",       &ll_max_easize_fops, NULL, 0 },
+	{ "default_easize",   &ll_defult_easize_fops, NULL, 0 },
+	{ "max_cookiesize",   &ll_max_cookiesize_fops, NULL, 0 },
+	{ "default_cookiesize", &ll_defult_cookiesize_fops, NULL, 0 },
+	{ "sbi_flags",	      &ll_sbi_flags_fops, NULL, 0 },
+	{ "xattr_cache",      &ll_xattr_cache_fops, NULL, 0 },
+	{ NULL }
 };
 
 #define MAX_STRING_SIZE 128
 
-struct llite_file_opcode {
+static const struct llite_file_opcode {
 	__u32       opcode;
 	__u32       type;
 	const char *opname;
@@ -804,6 +894,7 @@ struct llite_file_opcode {
 	{ LPROC_LL_ALLOC_INODE,    LPROCFS_TYPE_REGS, "alloc_inode" },
 	{ LPROC_LL_SETXATTR,       LPROCFS_TYPE_REGS, "setxattr" },
 	{ LPROC_LL_GETXATTR,       LPROCFS_TYPE_REGS, "getxattr" },
+	{ LPROC_LL_GETXATTR_HITS,  LPROCFS_TYPE_REGS, "getxattr_hits" },
 	{ LPROC_LL_LISTXATTR,      LPROCFS_TYPE_REGS, "listxattr" },
 	{ LPROC_LL_REMOVEXATTR,    LPROCFS_TYPE_REGS, "removexattr" },
 	{ LPROC_LL_INODE_PERM,     LPROCFS_TYPE_REGS, "inode_permission" },
@@ -819,10 +910,11 @@ void ll_stats_ops_tally(struct ll_sb_info *sbi, int op, int count)
 		 sbi->ll_stats_track_id == current->pid)
 		lprocfs_counter_add(sbi->ll_stats, op, count);
 	else if (sbi->ll_stats_track_type == STATS_TRACK_PPID &&
-		 sbi->ll_stats_track_id == current->parent->pid)
+		 sbi->ll_stats_track_id == current->real_parent->pid)
 		lprocfs_counter_add(sbi->ll_stats, op, count);
 	else if (sbi->ll_stats_track_type == STATS_TRACK_GID &&
-		 sbi->ll_stats_track_id == current_gid())
+		 sbi->ll_stats_track_id ==
+			from_kgid(&init_user_ns, current_gid()))
 		lprocfs_counter_add(sbi->ll_stats, op, count);
 }
 EXPORT_SYMBOL(ll_stats_ops_tally);
@@ -852,10 +944,9 @@ int lprocfs_register_mountpoint(struct proc_dir_entry *parent,
 	struct lustre_sb_info *lsi = s2lsi(sb);
 	struct ll_sb_info *sbi = ll_s2sbi(sb);
 	struct obd_device *obd;
-	proc_dir_entry_t *dir;
+	struct proc_dir_entry *dir;
 	char name[MAX_STRING_SIZE + 1], *ptr;
 	int err, id, len, rc;
-	ENTRY;
 
 	memset(lvars, 0, sizeof(lvars));
 
@@ -880,7 +971,7 @@ int lprocfs_register_mountpoint(struct proc_dir_entry *parent,
 	if (IS_ERR(sbi->ll_proc_root)) {
 		err = PTR_ERR(sbi->ll_proc_root);
 		sbi->ll_proc_root = NULL;
-		RETURN(err);
+		return err;
 	}
 
 	rc = lprocfs_seq_create(sbi->ll_proc_root, "dump_page_cache", 0444,
@@ -994,7 +1085,7 @@ out:
 		lprocfs_free_stats(&sbi->ll_ra_stats);
 		lprocfs_free_stats(&sbi->ll_stats);
 	}
-	RETURN(err);
+	return err;
 }
 
 void lprocfs_unregister_mountpoint(struct ll_sb_info *sbi)
@@ -1065,7 +1156,7 @@ static int ll_rw_extents_stats_pp_seq_show(struct seq_file *seq, void *v)
 		return 0;
 	}
 	seq_printf(seq, "snapshot_time:	 %lu.%lu (secs.usecs)\n",
-		   now.tv_sec, now.tv_usec);
+		   now.tv_sec, (unsigned long)now.tv_usec);
 	seq_printf(seq, "%15s %19s       | %20s\n", " ", "read", "write");
 	seq_printf(seq, "%13s   %14s %4s %4s  | %14s %4s %4s\n",
 		   "extents", "calls", "%", "cum%",
@@ -1083,7 +1174,8 @@ static int ll_rw_extents_stats_pp_seq_show(struct seq_file *seq, void *v)
 }
 
 static ssize_t ll_rw_extents_stats_pp_seq_write(struct file *file,
-						const char *buf, size_t len,
+						const char __user *buf,
+						size_t len,
 						loff_t *off)
 {
 	struct seq_file *seq = file->private_data;
@@ -1092,10 +1184,24 @@ static ssize_t ll_rw_extents_stats_pp_seq_write(struct file *file,
 	int i;
 	int value = 1, rc = 0;
 
+	if (len == 0)
+		return -EINVAL;
+
 	rc = lprocfs_write_helper(buf, len, &value);
-	if (rc < 0 && (strcmp(buf, "disabled") == 0 ||
-		       strcmp(buf, "Disabled") == 0))
-		value = 0;
+	if (rc < 0 && len < 16) {
+		char kernbuf[16];
+
+		if (copy_from_user(kernbuf, buf, len))
+			return -EFAULT;
+		kernbuf[len] = 0;
+
+		if (kernbuf[len - 1] == '\n')
+			kernbuf[len - 1] = 0;
+
+		if (strcmp(kernbuf, "disabled") == 0 ||
+		    strcmp(kernbuf, "Disabled") == 0)
+			value = 0;
+	}
 
 	if (value == 0)
 		sbi->ll_rw_stats_on = 0;
@@ -1129,7 +1235,7 @@ static int ll_rw_extents_stats_seq_show(struct seq_file *seq, void *v)
 		return 0;
 	}
 	seq_printf(seq, "snapshot_time:	 %lu.%lu (secs.usecs)\n",
-		   now.tv_sec, now.tv_usec);
+		   now.tv_sec, (unsigned long)now.tv_usec);
 
 	seq_printf(seq, "%15s %19s       | %20s\n", " ", "read", "write");
 	seq_printf(seq, "%13s   %14s %4s %4s  | %14s %4s %4s\n",
@@ -1142,8 +1248,9 @@ static int ll_rw_extents_stats_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static ssize_t ll_rw_extents_stats_seq_write(struct file *file, const char *buf,
-					size_t len, loff_t *off)
+static ssize_t ll_rw_extents_stats_seq_write(struct file *file,
+					     const char __user *buf,
+					     size_t len, loff_t *off)
 {
 	struct seq_file *seq = file->private_data;
 	struct ll_sb_info *sbi = seq->private;
@@ -1151,15 +1258,30 @@ static ssize_t ll_rw_extents_stats_seq_write(struct file *file, const char *buf,
 	int i;
 	int value = 1, rc = 0;
 
+	if (len == 0)
+		return -EINVAL;
+
 	rc = lprocfs_write_helper(buf, len, &value);
-	if (rc < 0 && (strcmp(buf, "disabled") == 0 ||
-		       strcmp(buf, "Disabled") == 0))
-		value = 0;
+	if (rc < 0 && len < 16) {
+		char kernbuf[16];
+
+		if (copy_from_user(kernbuf, buf, len))
+			return -EFAULT;
+		kernbuf[len] = 0;
+
+		if (kernbuf[len - 1] == '\n')
+			kernbuf[len - 1] = 0;
+
+		if (strcmp(kernbuf, "disabled") == 0 ||
+		    strcmp(kernbuf, "Disabled") == 0)
+			value = 0;
+	}
 
 	if (value == 0)
 		sbi->ll_rw_stats_on = 0;
 	else
 		sbi->ll_rw_stats_on = 1;
+
 	spin_lock(&sbi->ll_pp_extent_lock);
 	for (i = 0; i <= LL_PROCESS_HIST_MAX; i++) {
 		io_extents->pp_extents[i].pid = 0;
@@ -1170,7 +1292,6 @@ static ssize_t ll_rw_extents_stats_seq_write(struct file *file, const char *buf,
 
 	return len;
 }
-
 LPROC_SEQ_FOPS(ll_rw_extents_stats);
 
 void ll_rw_stats_tally(struct ll_sb_info *sbi, pid_t pid,
@@ -1295,15 +1416,16 @@ static int ll_rw_offset_stats_seq_show(struct seq_file *seq, void *v)
 	spin_lock(&sbi->ll_process_lock);
 
 	seq_printf(seq, "snapshot_time:	 %lu.%lu (secs.usecs)\n",
-		   now.tv_sec, now.tv_usec);
+		   now.tv_sec, (unsigned long)now.tv_usec);
 	seq_printf(seq, "%3s %10s %14s %14s %17s %17s %14s\n",
 		   "R/W", "PID", "RANGE START", "RANGE END",
 		   "SMALLEST EXTENT", "LARGEST EXTENT", "OFFSET");
 	/* We stored the discontiguous offsets here; print them first */
 	for(i = 0; i < LL_OFFSET_HIST_MAX; i++) {
 		if (offset[i].rw_pid != 0)
-			seq_printf(seq,"%3c %10d %14Lu %14Lu %17lu %17lu %14Lu",
-				   offset[i].rw_op ? 'W' : 'R',
+			seq_printf(seq,
+				   "%3c %10d %14Lu %14Lu %17lu %17lu %14Lu",
+				   offset[i].rw_op == READ ? 'R' : 'W',
 				   offset[i].rw_pid,
 				   offset[i].rw_range_start,
 				   offset[i].rw_range_end,
@@ -1314,8 +1436,9 @@ static int ll_rw_offset_stats_seq_show(struct seq_file *seq, void *v)
 	/* Then print the current offsets for each process */
 	for(i = 0; i < LL_PROCESS_HIST_MAX; i++) {
 		if (process[i].rw_pid != 0)
-			seq_printf(seq,"%3c %10d %14Lu %14Lu %17lu %17lu %14Lu",
-				   process[i].rw_op ? 'W' : 'R',
+			seq_printf(seq,
+				   "%3c %10d %14Lu %14Lu %17lu %17lu %14Lu",
+				   process[i].rw_op == READ ? 'R' : 'W',
 				   process[i].rw_pid,
 				   process[i].rw_range_start,
 				   process[i].rw_last_file_pos,
@@ -1328,8 +1451,9 @@ static int ll_rw_offset_stats_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static ssize_t ll_rw_offset_stats_seq_write(struct file *file, const char *buf,
-				       size_t len, loff_t *off)
+static ssize_t ll_rw_offset_stats_seq_write(struct file *file,
+					    const char __user *buf,
+					    size_t len, loff_t *off)
 {
 	struct seq_file *seq = file->private_data;
 	struct ll_sb_info *sbi = seq->private;
@@ -1337,11 +1461,25 @@ static ssize_t ll_rw_offset_stats_seq_write(struct file *file, const char *buf,
 	struct ll_rw_process_info *offset_info = sbi->ll_rw_offset_info;
 	int value = 1, rc = 0;
 
+	if (len == 0)
+		return -EINVAL;
+
 	rc = lprocfs_write_helper(buf, len, &value);
 
-	if (rc < 0 && (strcmp(buf, "disabled") == 0 ||
-			   strcmp(buf, "Disabled") == 0))
-		value = 0;
+	if (rc < 0 && len < 16) {
+		char kernbuf[16];
+
+		if (copy_from_user(kernbuf, buf, len))
+			return -EFAULT;
+		kernbuf[len] = 0;
+
+		if (kernbuf[len - 1] == '\n')
+			kernbuf[len - 1] = 0;
+
+		if (strcmp(kernbuf, "disabled") == 0 ||
+		    strcmp(kernbuf, "Disabled") == 0)
+			value = 0;
+	}
 
 	if (value == 0)
 		sbi->ll_rw_stats_on = 0;
@@ -1367,4 +1505,3 @@ void lprocfs_llite_init_vars(struct lprocfs_static_vars *lvars)
     lvars->module_vars  = NULL;
     lvars->obd_vars     = lprocfs_llite_obd_vars;
 }
-#endif /* LPROCFS */

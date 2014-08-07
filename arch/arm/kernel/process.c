@@ -30,7 +30,6 @@
 #include <linux/uaccess.h>
 #include <linux/random.h>
 #include <linux/hw_breakpoint.h>
-#include <linux/cpuidle.h>
 #include <linux/leds.h>
 #include <linux/reboot.h>
 
@@ -39,6 +38,7 @@
 #include <asm/processor.h>
 #include <asm/thread_notify.h>
 #include <asm/stacktrace.h>
+#include <asm/system_misc.h>
 #include <asm/mach/time.h>
 #include <asm/tls.h>
 
@@ -48,14 +48,14 @@ unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
 #endif
 
-static const char *processor_modes[] = {
+static const char *processor_modes[] __maybe_unused = {
   "USER_26", "FIQ_26" , "IRQ_26" , "SVC_26" , "UK4_26" , "UK5_26" , "UK6_26" , "UK7_26" ,
   "UK8_26" , "UK9_26" , "UK10_26", "UK11_26", "UK12_26", "UK13_26", "UK14_26", "UK15_26",
   "USER_32", "FIQ_32" , "IRQ_32" , "SVC_32" , "UK4_32" , "UK5_32" , "UK6_32" , "ABT_32" ,
   "UK8_32" , "UK9_32" , "UK10_32", "UND_32" , "UK12_32", "UK13_32", "UK14_32", "SYS_32"
 };
 
-static const char *isa_modes[] = {
+static const char *isa_modes[] __maybe_unused = {
   "ARM" , "Thumb" , "Jazelle", "ThumbEE"
 };
 
@@ -100,7 +100,7 @@ void soft_restart(unsigned long addr)
 	u64 *stack = soft_restart_stack + ARRAY_SIZE(soft_restart_stack);
 
 	/* Disable interrupts first */
-	local_irq_disable();
+	raw_local_irq_disable();
 	local_fiq_disable();
 
 	/* Disable the L2 if we're the last man standing. */
@@ -133,7 +133,11 @@ EXPORT_SYMBOL_GPL(arm_pm_restart);
 
 void (*arm_pm_idle)(void);
 
-static void default_idle(void)
+/*
+ * Called from the core idle loop.
+ */
+
+void arch_cpu_idle(void)
 {
 	if (arm_pm_idle)
 		arm_pm_idle();
@@ -168,15 +172,6 @@ void arch_cpu_idle_dead(void)
 #endif
 
 /*
- * Called from the core idle loop.
- */
-void arch_cpu_idle(void)
-{
-	if (cpuidle_idle_call())
-		default_idle();
-}
-
-/*
  * Called by kexec, immediately prior to machine_kexec().
  *
  * This must completely disable all secondary CPUs; simply causing those CPUs
@@ -197,6 +192,7 @@ void machine_shutdown(void)
  */
 void machine_halt(void)
 {
+	local_irq_disable();
 	smp_send_stop();
 
 	local_irq_disable();
@@ -211,6 +207,7 @@ void machine_halt(void)
  */
 void machine_power_off(void)
 {
+	local_irq_disable();
 	smp_send_stop();
 
 	if (pm_power_off)
@@ -230,6 +227,7 @@ void machine_power_off(void)
  */
 void machine_restart(char *cmd)
 {
+	local_irq_disable();
 	smp_send_stop();
 
 	arm_pm_restart(reboot_mode, cmd);
@@ -273,12 +271,17 @@ void __show_regs(struct pt_regs *regs)
 	buf[3] = flags & PSR_V_BIT ? 'V' : 'v';
 	buf[4] = '\0';
 
+#ifndef CONFIG_CPU_V7M
 	printk("Flags: %s  IRQs o%s  FIQs o%s  Mode %s  ISA %s  Segment %s\n",
 		buf, interrupts_enabled(regs) ? "n" : "ff",
 		fast_interrupts_enabled(regs) ? "n" : "ff",
 		processor_modes[processor_mode(regs)],
 		isa_modes[isa_mode(regs)],
 		get_fs() == get_ds() ? "kernel" : "user");
+#else
+	printk("xPSR: %08lx\n", regs->ARM_cpsr);
+#endif
+
 #ifdef CONFIG_CPU_CP15
 	{
 		unsigned int ctrl;
@@ -401,6 +404,7 @@ EXPORT_SYMBOL(dump_fpu);
 unsigned long get_wchan(struct task_struct *p)
 {
 	struct stackframe frame;
+	unsigned long stack_page;
 	int count = 0;
 	if (!p || p == current || p->state == TASK_RUNNING)
 		return 0;
@@ -409,9 +413,11 @@ unsigned long get_wchan(struct task_struct *p)
 	frame.sp = thread_saved_sp(p);
 	frame.lr = 0;			/* recovered from the stack */
 	frame.pc = thread_saved_pc(p);
+	stack_page = (unsigned long)task_stack_page(p);
 	do {
-		int ret = unwind_frame(&frame);
-		if (ret < 0)
+		if (frame.sp < stack_page ||
+		    frame.sp >= stack_page + THREAD_SIZE ||
+		    unwind_frame(&frame) < 0)
 			return 0;
 		if (!in_sched_functions(frame.pc))
 			return frame.pc;
@@ -426,10 +432,11 @@ unsigned long arch_randomize_brk(struct mm_struct *mm)
 }
 
 #ifdef CONFIG_MMU
+#ifdef CONFIG_KUSER_HELPERS
 /*
  * The vectors page is always readable from user space for the
- * atomic helpers and the signal restart code. Insert it into the
- * gate_vma so that it is visible through ptrace and /proc/<pid>/mem.
+ * atomic helpers. Insert it into the gate_vma so that it is visible
+ * through ptrace and /proc/<pid>/mem.
  */
 static struct vm_area_struct gate_vma = {
 	.vm_start	= 0xffff0000,
@@ -458,9 +465,48 @@ int in_gate_area_no_mm(unsigned long addr)
 {
 	return in_gate_area(NULL, addr);
 }
+#define is_gate_vma(vma)	((vma) == &gate_vma)
+#else
+#define is_gate_vma(vma)	0
+#endif
 
 const char *arch_vma_name(struct vm_area_struct *vma)
 {
-	return (vma == &gate_vma) ? "[vectors]" : NULL;
+	return is_gate_vma(vma) ? "[vectors]" :
+		(vma->vm_mm && vma->vm_start == vma->vm_mm->context.sigpage) ?
+		 "[sigpage]" : NULL;
+}
+
+static struct page *signal_page;
+extern struct page *get_signal_page(void);
+
+int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
+{
+	struct mm_struct *mm = current->mm;
+	unsigned long addr;
+	int ret;
+
+	if (!signal_page)
+		signal_page = get_signal_page();
+	if (!signal_page)
+		return -ENOMEM;
+
+	down_write(&mm->mmap_sem);
+	addr = get_unmapped_area(NULL, 0, PAGE_SIZE, 0, 0);
+	if (IS_ERR_VALUE(addr)) {
+		ret = addr;
+		goto up_fail;
+	}
+
+	ret = install_special_mapping(mm, addr, PAGE_SIZE,
+		VM_READ | VM_EXEC | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC,
+		&signal_page);
+
+	if (ret == 0)
+		mm->context.sigpage = addr;
+
+ up_fail:
+	up_write(&mm->mmap_sem);
+	return ret;
 }
 #endif

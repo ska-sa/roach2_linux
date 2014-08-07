@@ -21,16 +21,12 @@
  * See the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with GNU CC; see the file COPYING.  If not, write to
- * the Free Software Foundation, 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with GNU CC; see the file COPYING.  If not, see
+ * <http://www.gnu.org/licenses/>.
  *
  * Please send any bug reports or fixes you make to the
  * email address(es):
- *    lksctp developers <lksctp-developers@lists.sourceforge.net>
- *
- * Or submit a bug report through the following website:
- *    http://www.sf.net/projects/lksctp
+ *    lksctp developers <linux-sctp@vger.kernel.org>
  *
  * Written or modified by:
  *    La Monte H.P. Yarroll <piggy@acm.org>
@@ -41,9 +37,6 @@
  *    Ardelle Fan           <ardelle.fan@intel.com>
  *    Ryan Layer            <rmlayer@us.ibm.com>
  *    Kevin Gao             <kevin.gao@intel.com> 
- *
- * Any bugs reported given to us we will try to fix... any fixes shared will
- * be incorporated into the next SCTP release.
  */
 
 #ifndef __net_sctp_h__
@@ -96,12 +89,11 @@
 /*
  * sctp/protocol.c
  */
-extern int sctp_copy_local_addr_list(struct net *, struct sctp_bind_addr *,
-				     sctp_scope_t, gfp_t gfp,
-				     int flags);
-extern struct sctp_pf *sctp_get_pf_specific(sa_family_t family);
-extern int sctp_register_pf(struct sctp_pf *, sa_family_t);
-extern void sctp_addr_wq_mgmt(struct net *, struct sctp_sockaddr_entry *, int);
+int sctp_copy_local_addr_list(struct net *, struct sctp_bind_addr *,
+			      sctp_scope_t, gfp_t gfp, int flags);
+struct sctp_pf *sctp_get_pf_specific(sa_family_t family);
+int sctp_register_pf(struct sctp_pf *, sa_family_t);
+void sctp_addr_wq_mgmt(struct net *, struct sctp_sockaddr_entry *, int);
 
 /*
  * sctp/socket.c
@@ -109,14 +101,14 @@ extern void sctp_addr_wq_mgmt(struct net *, struct sctp_sockaddr_entry *, int);
 int sctp_backlog_rcv(struct sock *sk, struct sk_buff *skb);
 int sctp_inet_listen(struct socket *sock, int backlog);
 void sctp_write_space(struct sock *sk);
-void sctp_data_ready(struct sock *sk, int len);
+void sctp_data_ready(struct sock *sk);
 unsigned int sctp_poll(struct file *file, struct socket *sock,
 		poll_table *wait);
 void sctp_sock_rfree(struct sk_buff *skb);
 void sctp_copy_sock(struct sock *newsk, struct sock *sk,
 		    struct sctp_association *asoc);
 extern struct percpu_counter sctp_sockets_allocated;
-extern int sctp_asconf_mgmt(struct sctp_sock *, struct sctp_sockaddr_entry *);
+int sctp_asconf_mgmt(struct sctp_sock *, struct sctp_sockaddr_entry *);
 
 /*
  * sctp/primitive.c
@@ -177,25 +169,6 @@ extern struct kmem_cache *sctp_bucket_cachep __read_mostly;
 /*
  *  Section:  Macros, externs, and inlines
  */
-
-/* spin lock wrappers. */
-#define sctp_spin_lock_irqsave(lock, flags) spin_lock_irqsave(lock, flags)
-#define sctp_spin_unlock_irqrestore(lock, flags)  \
-       spin_unlock_irqrestore(lock, flags)
-#define sctp_local_bh_disable() local_bh_disable()
-#define sctp_local_bh_enable()  local_bh_enable()
-#define sctp_spin_lock(lock)    spin_lock(lock)
-#define sctp_spin_unlock(lock)  spin_unlock(lock)
-#define sctp_write_lock(lock)   write_lock(lock)
-#define sctp_write_unlock(lock) write_unlock(lock)
-#define sctp_read_lock(lock)    read_lock(lock)
-#define sctp_read_unlock(lock)  read_unlock(lock)
-
-/* sock lock wrappers. */
-#define sctp_lock_sock(sk)       lock_sock(sk)
-#define sctp_release_sock(sk)    release_sock(sk)
-#define sctp_bh_lock_sock(sk)    bh_lock_sock(sk)
-#define sctp_bh_unlock_sock(sk)  bh_unlock_sock(sk)
 
 /* SCTP SNMP MIB stats handlers */
 #define SCTP_INC_STATS(net, field)      SNMP_INC_STATS((net)->sctp.sctp_statistics, field)
@@ -361,13 +334,13 @@ static inline void sctp_skb_list_tail(struct sk_buff_head *list,
 {
 	unsigned long flags;
 
-	sctp_spin_lock_irqsave(&head->lock, flags);
-	sctp_spin_lock(&list->lock);
+	spin_lock_irqsave(&head->lock, flags);
+	spin_lock(&list->lock);
 
 	skb_queue_splice_tail_init(list, head);
 
-	sctp_spin_unlock(&list->lock);
-	sctp_spin_unlock_irqrestore(&head->lock, flags);
+	spin_unlock(&list->lock);
+	spin_unlock_irqrestore(&head->lock, flags);
 }
 
 /**
@@ -613,7 +586,7 @@ static inline void sctp_v4_map_v6(union sctp_addr *addr)
  */
 static inline struct dst_entry *sctp_transport_dst_check(struct sctp_transport *t)
 {
-	if (t->dst && !dst_check(t->dst, 0)) {
+	if (t->dst && !dst_check(t->dst, t->dst_cookie)) {
 		dst_release(t->dst);
 		t->dst = NULL;
 	}

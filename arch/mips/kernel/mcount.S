@@ -74,16 +74,12 @@ _mcount:
 #endif
 
 	/* When tracing is activated, it calls ftrace_caller+8 (aka here) */
-	lw	t1, function_trace_stop
-	bnez	t1, ftrace_stub
-	 nop
-
 	MCOUNT_SAVE_REGS
 #ifdef KBUILD_MCOUNT_RA_ADDRESS
 	PTR_S	MCOUNT_RA_ADDRESS_REG, PT_R12(sp)
 #endif
 
-	move	a0, ra		/* arg1: self return address */
+	PTR_SUBU a0, ra, 8	/* arg1: self address */
 	.globl ftrace_call
 ftrace_call:
 	nop	/* a placeholder for the call to a real tracing function */
@@ -105,9 +101,6 @@ ftrace_stub:
 #else	/* ! CONFIG_DYNAMIC_FTRACE */
 
 NESTED(_mcount, PT_SIZE, ra)
-	lw	t1, function_trace_stop
-	bnez	t1, ftrace_stub
-	 nop
 	PTR_LA	t1, ftrace_stub
 	PTR_L	t2, ftrace_trace_function /* Prepare t2 for (1) */
 	bne	t1, t2, static_trace
@@ -168,14 +161,10 @@ NESTED(ftrace_graph_caller, PT_SIZE, ra)
 #endif
 
 	/* arg3: Get frame pointer of current stack */
-#ifdef CONFIG_FRAME_POINTER
-	move	a2, fp
-#else /* ! CONFIG_FRAME_POINTER */
 #ifdef CONFIG_64BIT
 	PTR_LA	a2, PT_SIZE(sp)
 #else
 	PTR_LA	a2, (PT_SIZE+8)(sp)
-#endif
 #endif
 
 	jal	prepare_ftrace_return

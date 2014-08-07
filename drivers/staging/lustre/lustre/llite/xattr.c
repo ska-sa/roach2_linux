@@ -41,11 +41,11 @@
 
 #define DEBUG_SUBSYSTEM S_LLITE
 
-#include <obd_support.h>
-#include <lustre_lite.h>
-#include <lustre_dlm.h>
-#include <lustre_ver.h>
-#include <lustre_eacl.h>
+#include "../include/obd_support.h"
+#include "../include/lustre_lite.h"
+#include "../include/lustre_dlm.h"
+#include "../include/lustre_ver.h"
+#include "../include/lustre_eacl.h"
 
 #include "llite_internal.h"
 
@@ -95,7 +95,7 @@ int xattr_type_filter(struct ll_sb_info *sbi, int xattr_type)
 
 	if (xattr_type == XATTR_USER_T && !(sbi->ll_flags & LL_SBI_USER_XATTR))
 		return -EOPNOTSUPP;
-	if (xattr_type == XATTR_TRUSTED_T && !cfs_capable(CFS_CAP_SYS_ADMIN))
+	if (xattr_type == XATTR_TRUSTED_T && !capable(CFS_CAP_SYS_ADMIN))
 		return -EPERM;
 	if (xattr_type == XATTR_OTHER_T)
 		return -EOPNOTSUPP;
@@ -109,34 +109,40 @@ int ll_setxattr_common(struct inode *inode, const char *name,
 		       int flags, __u64 valid)
 {
 	struct ll_sb_info *sbi = ll_i2sbi(inode);
-	struct ptlrpc_request *req;
+	struct ptlrpc_request *req = NULL;
 	int xattr_type, rc;
 	struct obd_capa *oc;
-	posix_acl_xattr_header *new_value = NULL;
+#ifdef CONFIG_FS_POSIX_ACL
 	struct rmtacl_ctl_entry *rce = NULL;
+	posix_acl_xattr_header *new_value = NULL;
 	ext_acl_xattr_header *acl = NULL;
+#endif
 	const char *pv = value;
-	ENTRY;
 
 	xattr_type = get_xattr_type(name);
 	rc = xattr_type_filter(sbi, xattr_type);
 	if (rc)
-		RETURN(rc);
+		return rc;
+
+	if ((xattr_type == XATTR_ACL_ACCESS_T ||
+	     xattr_type == XATTR_ACL_DEFAULT_T) &&
+	    !inode_owner_or_capable(inode))
+		return -EPERM;
 
 	/* b10667: ignore lustre special xattr for now */
 	if ((xattr_type == XATTR_TRUSTED_T && strcmp(name, "trusted.lov") == 0) ||
 	    (xattr_type == XATTR_LUSTRE_T && strcmp(name, "lustre.lov") == 0))
-		RETURN(0);
+		return 0;
 
 	/* b15587: ignore security.capability xattr for now */
 	if ((xattr_type == XATTR_SECURITY_T &&
 	    strcmp(name, "security.capability") == 0))
-		RETURN(0);
+		return 0;
 
 	/* LU-549:  Disable security.selinux when selinux is disabled */
 	if (xattr_type == XATTR_SECURITY_T && !selinux_is_enabled() &&
 	    strcmp(name, "security.selinux") == 0)
-		RETURN(-EOPNOTSUPP);
+		return -EOPNOTSUPP;
 
 #ifdef CONFIG_FS_POSIX_ACL
 	if (sbi->ll_flags & LL_SBI_RMT_CLIENT &&
@@ -146,7 +152,7 @@ int ll_setxattr_common(struct inode *inode, const char *name,
 		if (rce == NULL ||
 		    (rce->rce_ops != RMT_LSETFACL &&
 		    rce->rce_ops != RMT_RSETFACL))
-			RETURN(-EOPNOTSUPP);
+			return -EOPNOTSUPP;
 
 		if (rce->rce_ops == RMT_LSETFACL) {
 			struct eacl_entry *ee;
@@ -160,7 +166,7 @@ int ll_setxattr_common(struct inode *inode, const char *name,
 						size, ee->ee_acl);
 				if (IS_ERR(acl)) {
 					ee_free(ee);
-					RETURN(PTR_ERR(acl));
+					return PTR_ERR(acl);
 				}
 				size =  CFS_ACL_XATTR_SIZE(\
 						le32_to_cpu(acl->a_count), \
@@ -173,20 +179,20 @@ int ll_setxattr_common(struct inode *inode, const char *name,
 						(posix_acl_xattr_header *)value,
 						size, &new_value);
 			if (unlikely(size < 0))
-				RETURN(size);
+				return size;
 
 			pv = (const char *)new_value;
 		} else
-			RETURN(-EOPNOTSUPP);
+			return -EOPNOTSUPP;
 
 		valid |= rce_ops2valid(rce->rce_ops);
 	}
 #endif
-	oc = ll_mdscapa_get(inode);
-	rc = md_setxattr(sbi->ll_md_exp, ll_inode2fid(inode), oc,
-			 valid, name, pv, size, 0, flags, ll_i2suppgid(inode),
-			 &req);
-	capa_put(oc);
+		oc = ll_mdscapa_get(inode);
+		rc = md_setxattr(sbi->ll_md_exp, ll_inode2fid(inode), oc,
+				valid, name, pv, size, 0, flags,
+				ll_i2suppgid(inode), &req);
+		capa_put(oc);
 #ifdef CONFIG_FS_POSIX_ACL
 	if (new_value != NULL)
 		lustre_posix_acl_xattr_free(new_value, size);
@@ -199,11 +205,11 @@ int ll_setxattr_common(struct inode *inode, const char *name,
 				      "it is not supported on the server\n");
 			sbi->ll_flags &= ~LL_SBI_USER_XATTR;
 		}
-		RETURN(rc);
+		return rc;
 	}
 
 	ptlrpc_req_finished(req);
-	RETURN(0);
+	return 0;
 }
 
 int ll_setxattr(struct dentry *dentry, const char *name,
@@ -240,6 +246,7 @@ int ll_setxattr(struct dentry *dentry, const char *name,
 			int lum_size = (lump->lmm_magic == LOV_USER_MAGIC_V1) ?
 				sizeof(*lump) : sizeof(struct lov_user_md_v3);
 
+			memset(&f, 0, sizeof(f)); /* f.f_flags is used below */
 			f.f_dentry = dentry;
 			rc = ll_lov_setstripe_ea_info(inode, &f, flags, lump,
 						      lum_size);
@@ -285,7 +292,7 @@ int ll_getxattr_common(struct inode *inode, const char *name,
 	void *xdata;
 	struct obd_capa *oc;
 	struct rmtacl_ctl_entry *rce = NULL;
-	ENTRY;
+	struct ll_inode_info *lli = ll_i2info(inode);
 
 	CDEBUG(D_VFSTRACE, "VFS Op:inode=%lu/%u(%p)\n",
 	       inode->i_ino, inode->i_generation, inode);
@@ -302,17 +309,17 @@ int ll_getxattr_common(struct inode *inode, const char *name,
 	xattr_type = get_xattr_type(name);
 	rc = xattr_type_filter(sbi, xattr_type);
 	if (rc)
-		RETURN(rc);
+		return rc;
 
 	/* b15587: ignore security.capability xattr for now */
 	if ((xattr_type == XATTR_SECURITY_T &&
 	    strcmp(name, "security.capability") == 0))
-		RETURN(-ENODATA);
+		return -ENODATA;
 
 	/* LU-549:  Disable security.selinux when selinux is disabled */
 	if (xattr_type == XATTR_SECURITY_T && !selinux_is_enabled() &&
 	    strcmp(name, "security.selinux") == 0)
-		RETURN(-EOPNOTSUPP);
+		return -EOPNOTSUPP;
 
 #ifdef CONFIG_FS_POSIX_ACL
 	if (sbi->ll_flags & LL_SBI_RMT_CLIENT &&
@@ -324,7 +331,7 @@ int ll_getxattr_common(struct inode *inode, const char *name,
 		    rce->rce_ops != RMT_LGETFACL &&
 		    rce->rce_ops != RMT_RSETFACL &&
 		    rce->rce_ops != RMT_RGETFACL))
-			RETURN(-EOPNOTSUPP);
+			return -EOPNOTSUPP;
 	}
 
 	/* posix acl is under protection of LOOKUP lock. when calling to this,
@@ -333,7 +340,7 @@ int ll_getxattr_common(struct inode *inode, const char *name,
 	 */
 	if (xattr_type == XATTR_ACL_ACCESS_T &&
 	    !(sbi->ll_flags & LL_SBI_RMT_CLIENT)) {
-		struct ll_inode_info *lli = ll_i2info(inode);
+
 		struct posix_acl *acl;
 
 		spin_lock(&lli->lli_lock);
@@ -341,59 +348,79 @@ int ll_getxattr_common(struct inode *inode, const char *name,
 		spin_unlock(&lli->lli_lock);
 
 		if (!acl)
-			RETURN(-ENODATA);
+			return -ENODATA;
 
 		rc = posix_acl_to_xattr(&init_user_ns, acl, buffer, size);
 		posix_acl_release(acl);
-		RETURN(rc);
+		return rc;
 	}
 	if (xattr_type == XATTR_ACL_DEFAULT_T && !S_ISDIR(inode->i_mode))
-		RETURN(-ENODATA);
+		return -ENODATA;
 #endif
 
 do_getxattr:
-	oc = ll_mdscapa_get(inode);
-	rc = md_getxattr(sbi->ll_md_exp, ll_inode2fid(inode), oc,
-			 valid | (rce ? rce_ops2valid(rce->rce_ops) : 0),
-			 name, NULL, 0, size, 0, &req);
-	capa_put(oc);
-	if (rc) {
-		if (rc == -EOPNOTSUPP && xattr_type == XATTR_USER_T) {
-			LCONSOLE_INFO("Disabling user_xattr feature because "
-				      "it is not supported on the server\n");
-			sbi->ll_flags &= ~LL_SBI_USER_XATTR;
+	if (sbi->ll_xattr_cache_enabled && xattr_type != XATTR_ACL_ACCESS_T) {
+		rc = ll_xattr_cache_get(inode, name, buffer, size, valid);
+		if (rc == -EAGAIN)
+			goto getxattr_nocache;
+		if (rc < 0)
+			GOTO(out_xattr, rc);
+
+		/* Add "system.posix_acl_access" to the list */
+		if (lli->lli_posix_acl != NULL && valid & OBD_MD_FLXATTRLS) {
+			if (size == 0) {
+				rc += sizeof(XATTR_NAME_ACL_ACCESS);
+			} else if (size - rc >= sizeof(XATTR_NAME_ACL_ACCESS)) {
+				memcpy(buffer + rc, XATTR_NAME_ACL_ACCESS,
+				       sizeof(XATTR_NAME_ACL_ACCESS));
+				rc += sizeof(XATTR_NAME_ACL_ACCESS);
+			} else {
+				GOTO(out_xattr, rc = -ERANGE);
+			}
 		}
-		RETURN(rc);
+	} else {
+getxattr_nocache:
+		oc = ll_mdscapa_get(inode);
+		rc = md_getxattr(sbi->ll_md_exp, ll_inode2fid(inode), oc,
+				valid | (rce ? rce_ops2valid(rce->rce_ops) : 0),
+				name, NULL, 0, size, 0, &req);
+		capa_put(oc);
+
+		if (rc < 0)
+			GOTO(out_xattr, rc);
+
+		body = req_capsule_server_get(&req->rq_pill, &RMF_MDT_BODY);
+		LASSERT(body);
+
+		/* only detect the xattr size */
+		if (size == 0)
+			GOTO(out, rc = body->eadatasize);
+
+		if (size < body->eadatasize) {
+			CERROR("server bug: replied size %u > %u\n",
+				body->eadatasize, (int)size);
+			GOTO(out, rc = -ERANGE);
+		}
+
+		if (body->eadatasize == 0)
+			GOTO(out, rc = -ENODATA);
+
+		/* do not need swab xattr data */
+		xdata = req_capsule_server_sized_get(&req->rq_pill, &RMF_EADATA,
+							body->eadatasize);
+		if (!xdata)
+			GOTO(out, rc = -EFAULT);
+
+		memcpy(buffer, xdata, body->eadatasize);
+		rc = body->eadatasize;
 	}
-
-	body = req_capsule_server_get(&req->rq_pill, &RMF_MDT_BODY);
-	LASSERT(body);
-
-	/* only detect the xattr size */
-	if (size == 0)
-		GOTO(out, rc = body->eadatasize);
-
-	if (size < body->eadatasize) {
-		CERROR("server bug: replied size %u > %u\n",
-		       body->eadatasize, (int)size);
-		GOTO(out, rc = -ERANGE);
-	}
-
-	if (body->eadatasize == 0)
-		GOTO(out, rc = -ENODATA);
-
-	/* do not need swab xattr data */
-	xdata = req_capsule_server_sized_get(&req->rq_pill, &RMF_EADATA,
-					     body->eadatasize);
-	if (!xdata)
-		GOTO(out, rc = -EFAULT);
 
 #ifdef CONFIG_FS_POSIX_ACL
-	if (body->eadatasize >= 0 && rce && rce->rce_ops == RMT_LSETFACL) {
+	if (rce && rce->rce_ops == RMT_LSETFACL) {
 		ext_acl_xattr_header *acl;
 
-		acl = lustre_posix_acl_xattr_2ext((posix_acl_xattr_header *)xdata,
-						  body->eadatasize);
+		acl = lustre_posix_acl_xattr_2ext(
+					(posix_acl_xattr_header *)buffer, rc);
 		if (IS_ERR(acl))
 			GOTO(out, rc = PTR_ERR(acl));
 
@@ -406,14 +433,13 @@ do_getxattr:
 	}
 #endif
 
-	if (body->eadatasize == 0) {
-		rc = -ENODATA;
-	} else {
-		LASSERT(buffer);
-		memcpy(buffer, xdata, body->eadatasize);
-		rc = body->eadatasize;
+out_xattr:
+	if (rc == -EOPNOTSUPP && xattr_type == XATTR_USER_T) {
+		LCONSOLE_INFO(
+			"%s: disabling user_xattr feature because it is not supported on the server: rc = %d\n",
+			ll_get_fsname(inode->i_sb, NULL, 0), rc);
+		sbi->ll_flags &= ~LL_SBI_USER_XATTR;
 	}
-	EXIT;
 out:
 	ptlrpc_req_finished(req);
 	return rc;
@@ -562,7 +588,12 @@ ssize_t ll_listxattr(struct dentry *dentry, char *buffer, size_t size)
 		const size_t name_len   = sizeof("lov") - 1;
 		const size_t total_len  = prefix_len + name_len + 1;
 
-		if (buffer && (rc + total_len) <= size) {
+		if (((rc + total_len) > size) && (buffer != NULL)) {
+			ptlrpc_req_finished(request);
+			return -ERANGE;
+		}
+
+		if (buffer != NULL) {
 			buffer += rc;
 			memcpy(buffer, XATTR_LUSTRE_PREFIX, prefix_len);
 			memcpy(buffer + prefix_len, "lov", name_len);

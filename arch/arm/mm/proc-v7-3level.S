@@ -64,6 +64,14 @@ ENTRY(cpu_v7_switch_mm)
 	mov	pc, lr
 ENDPROC(cpu_v7_switch_mm)
 
+#ifdef __ARMEB__
+#define rl r3
+#define rh r2
+#else
+#define rl r2
+#define rh r3
+#endif
+
 /*
  * cpu_v7_set_pte_ext(ptep, pte)
  *
@@ -73,15 +81,15 @@ ENDPROC(cpu_v7_switch_mm)
  */
 ENTRY(cpu_v7_set_pte_ext)
 #ifdef CONFIG_MMU
-	tst	r2, #L_PTE_VALID
+	tst	rl, #L_PTE_VALID
 	beq	1f
-	tst	r3, #1 << (57 - 32)		@ L_PTE_NONE
-	bicne	r2, #L_PTE_VALID
+	tst	rh, #1 << (57 - 32)		@ L_PTE_NONE
+	bicne	rl, #L_PTE_VALID
 	bne	1f
-	tst	r3, #1 << (55 - 32)		@ L_PTE_DIRTY
-	orreq	r2, #L_PTE_RDONLY
+	tst	rh, #1 << (55 - 32)		@ L_PTE_DIRTY
+	orreq	rl, #L_PTE_RDONLY
 1:	strd	r2, r3, [r0]
-	ALT_SMP(mov	pc, lr)
+	ALT_SMP(W(nop))
 	ALT_UP (mcr	p15, 0, r0, c7, c10, 1)		@ flush_pte
 #endif
 	mov	pc, lr
@@ -140,8 +148,6 @@ ENDPROC(cpu_v7_set_pte_ext)
 	mcrr	p15, 0, \ttbr0, \zero, c2			@ load TTBR0
 	.endm
 
-	__CPUINIT
-
 	/*
 	 *   AT
 	 *  TFR   EV X F   IHD LR    S
@@ -153,5 +159,3 @@ ENDPROC(cpu_v7_set_pte_ext)
 	.type	v7_crval, #object
 v7_crval:
 	crval	clear=0x0120c302, mmuset=0x30c23c7d, ucset=0x00c01c7c
-
-	.previous

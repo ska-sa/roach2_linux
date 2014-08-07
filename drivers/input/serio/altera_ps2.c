@@ -12,7 +12,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/input.h>
 #include <linux/serio.h>
 #include <linux/interrupt.h>
@@ -176,6 +175,7 @@ static int altera_ps2_remove(struct platform_device *pdev)
 #ifdef CONFIG_OF
 static const struct of_device_id altera_ps2_match[] = {
 	{ .compatible = "ALTR,ps2-1.0", },
+	{ .compatible = "altr,ps2-1.0", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, altera_ps2_match);

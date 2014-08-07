@@ -177,7 +177,11 @@ enum drbd_ret_code {
 	ERR_NEED_APV_100	= 163,
 	ERR_NEED_ALLOW_TWO_PRI  = 164,
 	ERR_MD_UNCLEAN          = 165,
-
+	ERR_MD_LAYOUT_CONNECTED = 166,
+	ERR_MD_LAYOUT_TOO_BIG   = 167,
+	ERR_MD_LAYOUT_TOO_SMALL = 168,
+	ERR_MD_LAYOUT_NO_FIT    = 169,
+	ERR_IMPLICIT_SHRINK     = 170,
 	/* insert new ones above this line */
 	AFTER_LAST_ERR_CODE
 };
@@ -323,12 +327,6 @@ enum drbd_state_rv {
 	SS_AFTER_LAST_ERROR = -22,    /* Keep this at bottom */
 };
 
-/* from drbd_strings.c */
-extern const char *drbd_conn_str(enum drbd_conns);
-extern const char *drbd_role_str(enum drbd_role);
-extern const char *drbd_disk_str(enum drbd_disk_state);
-extern const char *drbd_set_st_err_str(enum drbd_state_rv);
-
 #define SHARED_SECRET_MAX 64
 
 #define MDF_CONSISTENT		(1 << 0)
@@ -377,5 +375,7 @@ enum drbd_timeout_flag {
 #define DRBD_MD_INDEX_INTERNAL -1
 #define DRBD_MD_INDEX_FLEX_EXT -2
 #define DRBD_MD_INDEX_FLEX_INT -3
+
+#define DRBD_CPU_MASK_SIZE 32
 
 #endif

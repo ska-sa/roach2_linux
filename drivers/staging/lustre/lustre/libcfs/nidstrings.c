@@ -40,8 +40,8 @@
 
 #define DEBUG_SUBSYSTEM S_LNET
 
-#include <linux/libcfs/libcfs.h>
-#include <linux/lnet/lnet.h>
+#include "../../include/linux/libcfs/libcfs.h"
+#include "../../include/linux/lnet/lnet.h"
 
 /* CAVEAT VENDITOR! Keep the canonical string representation of nets/nids
  * consistent in all conversion functions.  Some code fragments are copied
@@ -56,32 +56,28 @@
  */
 
 static char      libcfs_nidstrings[LNET_NIDSTR_COUNT][LNET_NIDSTR_SIZE];
-static int       libcfs_nidstring_idx = 0;
+static int       libcfs_nidstring_idx;
 
 static spinlock_t libcfs_nidstring_lock;
 
-void libcfs_init_nidstrings (void)
+void libcfs_init_nidstrings(void)
 {
 	spin_lock_init(&libcfs_nidstring_lock);
 }
 
-# define NIDSTR_LOCK(f)   spin_lock_irqsave(&libcfs_nidstring_lock, f)
-# define NIDSTR_UNLOCK(f) spin_unlock_irqrestore(&libcfs_nidstring_lock, f)
-
 static char *
-libcfs_next_nidstring (void)
+libcfs_next_nidstring(void)
 {
 	char	  *str;
 	unsigned long  flags;
 
-	NIDSTR_LOCK(flags);
+	spin_lock_irqsave(&libcfs_nidstring_lock, flags);
 
 	str = libcfs_nidstrings[libcfs_nidstring_idx++];
-	if (libcfs_nidstring_idx ==
-	    sizeof(libcfs_nidstrings)/sizeof(libcfs_nidstrings[0]))
+	if (libcfs_nidstring_idx == ARRAY_SIZE(libcfs_nidstrings))
 		libcfs_nidstring_idx = 0;
 
-	NIDSTR_UNLOCK(flags);
+	spin_unlock_irqrestore(&libcfs_nidstring_lock, flags);
 	return str;
 }
 
@@ -201,7 +197,7 @@ static struct netstrfns  libcfs_netstrfns[] = {
 	{/* .nf_type      */  -1},
 };
 
-const int libcfs_nnetstrfns = sizeof(libcfs_netstrfns)/sizeof(libcfs_netstrfns[0]);
+const int libcfs_nnetstrfns = ARRAY_SIZE(libcfs_netstrfns);
 
 int
 libcfs_lo_str2addr(const char *str, int nob, __u32 *addr)
@@ -230,11 +226,11 @@ libcfs_ip_addr2str(__u32 addr, char *str)
 int
 libcfs_ip_str2addr(const char *str, int nob, __u32 *addr)
 {
-	int   a;
-	int   b;
-	int   c;
-	int   d;
-	int   n = nob;			  /* XscanfX */
+	unsigned int	a;
+	unsigned int	b;
+	unsigned int	c;
+	unsigned int	d;
+	int		n = nob; /* XscanfX */
 
 	/* numeric IP? */
 	if (sscanf(str, "%u.%u.%u.%u%n", &a, &b, &c, &d, &n) >= 4 &&
@@ -326,6 +322,7 @@ libcfs_isknown_lnd(int type)
 {
 	return libcfs_lnd2netstrfns(type) != NULL;
 }
+EXPORT_SYMBOL(libcfs_isknown_lnd);
 
 char *
 libcfs_lnd2modname(int lnd)
@@ -334,6 +331,7 @@ libcfs_lnd2modname(int lnd)
 
 	return (nf == NULL) ? NULL : nf->nf_modname;
 }
+EXPORT_SYMBOL(libcfs_lnd2modname);
 
 char *
 libcfs_lnd2str(int lnd)
@@ -348,6 +346,7 @@ libcfs_lnd2str(int lnd)
 	snprintf(str, LNET_NIDSTR_SIZE, "?%u?", lnd);
 	return str;
 }
+EXPORT_SYMBOL(libcfs_lnd2str);
 
 int
 libcfs_str2lnd(const char *str)
@@ -359,6 +358,7 @@ libcfs_str2lnd(const char *str)
 
 	return -1;
 }
+EXPORT_SYMBOL(libcfs_str2lnd);
 
 char *
 libcfs_net2str(__u32 net)
@@ -377,6 +377,7 @@ libcfs_net2str(__u32 net)
 
 	return str;
 }
+EXPORT_SYMBOL(libcfs_net2str);
 
 char *
 libcfs_nid2str(lnet_nid_t nid)
@@ -410,13 +411,14 @@ libcfs_nid2str(lnet_nid_t nid)
 
 	return str;
 }
+EXPORT_SYMBOL(libcfs_nid2str);
 
 static struct netstrfns *
 libcfs_str2net_internal(const char *str, __u32 *net)
 {
 	struct netstrfns *uninitialized_var(nf);
 	int	       nob;
-	int	       netnum;
+	unsigned int   netnum;
 	int	       i;
 
 	for (i = 0; i < libcfs_nnetstrfns; i++) {
@@ -458,6 +460,7 @@ libcfs_str2net(const char *str)
 
 	return LNET_NIDNET(LNET_NID_ANY);
 }
+EXPORT_SYMBOL(libcfs_str2net);
 
 lnet_nid_t
 libcfs_str2nid(const char *str)
@@ -475,7 +478,7 @@ libcfs_str2nid(const char *str)
 		sep = str + strlen(str);
 		net = LNET_MKNET(SOCKLND, 0);
 		nf = libcfs_lnd2netstrfns(SOCKLND);
-		LASSERT (nf != NULL);
+		LASSERT(nf != NULL);
 	}
 
 	if (!nf->nf_str2addr(str, (int)(sep - str), &addr))
@@ -483,6 +486,7 @@ libcfs_str2nid(const char *str)
 
 	return LNET_MKNID(net, addr);
 }
+EXPORT_SYMBOL(libcfs_str2nid);
 
 char *
 libcfs_id2str(lnet_process_id_t id)
@@ -500,6 +504,7 @@ libcfs_id2str(lnet_process_id_t id)
 		 (id.pid & ~LNET_PID_USERFLAG), libcfs_nid2str(id.nid));
 	return str;
 }
+EXPORT_SYMBOL(libcfs_id2str);
 
 int
 libcfs_str2anynid(lnet_nid_t *nidp, const char *str)
@@ -512,6 +517,7 @@ libcfs_str2anynid(lnet_nid_t *nidp, const char *str)
 	*nidp = libcfs_str2nid(str);
 	return *nidp != LNET_NID_ANY;
 }
+EXPORT_SYMBOL(libcfs_str2anynid);
 
 /**
  * Nid range list syntax.
@@ -765,6 +771,7 @@ cfs_free_nidlist(struct list_head *list)
 		LIBCFS_FREE(nr, sizeof(struct nidrange));
 	}
 }
+EXPORT_SYMBOL(cfs_free_nidlist);
 
 /**
  * Parses nid range list.
@@ -785,7 +792,6 @@ cfs_parse_nidlist(char *str, int len, struct list_head *nidlist)
 	struct cfs_lstr src;
 	struct cfs_lstr res;
 	int rc;
-	ENTRY;
 
 	src.ls_str = str;
 	src.ls_len = len;
@@ -794,16 +800,17 @@ cfs_parse_nidlist(char *str, int len, struct list_head *nidlist)
 		rc = cfs_gettok(&src, ' ', &res);
 		if (rc == 0) {
 			cfs_free_nidlist(nidlist);
-			RETURN(0);
+			return 0;
 		}
 		rc = parse_nidrange(&res, nidlist);
 		if (rc == 0) {
 			cfs_free_nidlist(nidlist);
-			RETURN(0);
+			return 0;
 		}
 	}
-	RETURN(1);
+	return 1;
 }
+EXPORT_SYMBOL(cfs_parse_nidlist);
 
 /*
  * Nf_match_addr method for networks using numeric addresses
@@ -834,7 +841,6 @@ int cfs_match_nid(lnet_nid_t nid, struct list_head *nidlist)
 {
 	struct nidrange *nr;
 	struct addrrange *ar;
-	ENTRY;
 
 	list_for_each_entry(nr, nidlist, nr_link) {
 		if (nr->nr_netstrfns->nf_type != LNET_NETTYP(LNET_NIDNET(nid)))
@@ -842,26 +848,12 @@ int cfs_match_nid(lnet_nid_t nid, struct list_head *nidlist)
 		if (nr->nr_netnum != LNET_NETNUM(LNET_NIDNET(nid)))
 			continue;
 		if (nr->nr_all)
-			RETURN(1);
+			return 1;
 		list_for_each_entry(ar, &nr->nr_addrranges, ar_link)
 			if (nr->nr_netstrfns->nf_match_addr(LNET_NIDADDR(nid),
 						       &ar->ar_numaddr_ranges))
-				RETURN(1);
+				return 1;
 	}
-	RETURN(0);
+	return 0;
 }
-
-
-EXPORT_SYMBOL(libcfs_isknown_lnd);
-EXPORT_SYMBOL(libcfs_lnd2modname);
-EXPORT_SYMBOL(libcfs_lnd2str);
-EXPORT_SYMBOL(libcfs_str2lnd);
-EXPORT_SYMBOL(libcfs_net2str);
-EXPORT_SYMBOL(libcfs_nid2str);
-EXPORT_SYMBOL(libcfs_str2net);
-EXPORT_SYMBOL(libcfs_str2nid);
-EXPORT_SYMBOL(libcfs_id2str);
-EXPORT_SYMBOL(libcfs_str2anynid);
-EXPORT_SYMBOL(cfs_free_nidlist);
-EXPORT_SYMBOL(cfs_parse_nidlist);
 EXPORT_SYMBOL(cfs_match_nid);

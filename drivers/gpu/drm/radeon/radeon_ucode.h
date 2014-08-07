@@ -35,6 +35,12 @@
 #define SI_PFP_UCODE_SIZE            2144
 #define SI_PM4_UCODE_SIZE            2144
 #define SI_CE_UCODE_SIZE             2144
+#define CIK_PFP_UCODE_SIZE           2144
+#define CIK_ME_UCODE_SIZE            2144
+#define CIK_CE_UCODE_SIZE            2144
+
+/* MEC */
+#define CIK_MEC_UCODE_SIZE           4192
 
 /* RLC */
 #define R600_RLC_UCODE_SIZE          768
@@ -43,12 +49,27 @@
 #define CAYMAN_RLC_UCODE_SIZE        1024
 #define ARUBA_RLC_UCODE_SIZE         1536
 #define SI_RLC_UCODE_SIZE            2048
+#define BONAIRE_RLC_UCODE_SIZE       2048
+#define KB_RLC_UCODE_SIZE            2560
+#define KV_RLC_UCODE_SIZE            2560
+#define ML_RLC_UCODE_SIZE            2560
 
 /* MC */
 #define BTC_MC_UCODE_SIZE            6024
 #define CAYMAN_MC_UCODE_SIZE         6037
 #define SI_MC_UCODE_SIZE             7769
+#define TAHITI_MC_UCODE_SIZE         7808
+#define PITCAIRN_MC_UCODE_SIZE       7775
+#define VERDE_MC_UCODE_SIZE          7875
 #define OLAND_MC_UCODE_SIZE          7863
+#define BONAIRE_MC_UCODE_SIZE        7866
+#define BONAIRE_MC2_UCODE_SIZE       7948
+#define HAWAII_MC_UCODE_SIZE         7933
+#define HAWAII_MC2_UCODE_SIZE        8091
+
+/* SDMA */
+#define CIK_SDMA_UCODE_SIZE          1050
+#define CIK_SDMA_UCODE_VERSION       64
 
 /* SMC */
 #define RV770_SMC_UCODE_START        0x0100
@@ -125,5 +146,11 @@
 
 #define HAINAN_SMC_UCODE_START       0x10000
 #define HAINAN_SMC_UCODE_SIZE        0xe67C
+
+#define BONAIRE_SMC_UCODE_START      0x20000
+#define BONAIRE_SMC_UCODE_SIZE       0x1FDEC
+
+#define HAWAII_SMC_UCODE_START       0x20000
+#define HAWAII_SMC_UCODE_SIZE        0x1FDEC
 
 #endif

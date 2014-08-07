@@ -1,9 +1,7 @@
 /*******************************************************************************
  * This file contains main functions related to iSCSI Parameter negotiation.
  *
- * \u00a9 Copyright 2007-2011 RisingTide Systems LLC.
- *
- * Licensed to the Linux Foundation under the General Public License (GPL) version 2.
+ * (c) Copyright 2007-2013 Datera, Inc.
  *
  * Author: Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
@@ -476,10 +474,10 @@ int iscsi_set_keys_to_negotiate(
 		if (!strcmp(param->name, AUTHMETHOD)) {
 			SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, HEADERDIGEST)) {
-			if (iser == false)
+			if (!iser)
 				SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, DATADIGEST)) {
-			if (iser == false)
+			if (!iser)
 				SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, MAXCONNECTIONS)) {
 			SET_PSTATE_NEGOTIATE(param);
@@ -499,7 +497,7 @@ int iscsi_set_keys_to_negotiate(
 		} else if (!strcmp(param->name, IMMEDIATEDATA)) {
 			SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, MAXRECVDATASEGMENTLENGTH)) {
-			if (iser == false)
+			if (!iser)
 				SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, MAXXMITDATASEGMENTLENGTH)) {
 			continue;
@@ -530,13 +528,13 @@ int iscsi_set_keys_to_negotiate(
 		} else if (!strcmp(param->name, OFMARKINT)) {
 			SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, RDMAEXTENSIONS)) {
-			if (iser == true)
+			if (iser)
 				SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, INITIATORRECVDATASEGMENTLENGTH)) {
-			if (iser == true)
+			if (iser)
 				SET_PSTATE_NEGOTIATE(param);
 		} else if (!strcmp(param->name, TARGETRECVDATASEGMENTLENGTH)) {
-			if (iser == true)
+			if (iser)
 				SET_PSTATE_NEGOTIATE(param);
 		}
 	}
@@ -1182,7 +1180,7 @@ static int iscsi_check_acceptor_state(struct iscsi_param *param, char *value,
 			unsigned long long tmp;
 			int rc;
 
-			rc = strict_strtoull(param->value, 0, &tmp);
+			rc = kstrtoull(param->value, 0, &tmp);
 			if (rc < 0)
 				return -1;
 
@@ -1607,7 +1605,7 @@ int iscsi_decode_text_input(
 
 	tmpbuf = kzalloc(length + 1, GFP_KERNEL);
 	if (!tmpbuf) {
-		pr_err("Unable to allocate memory for tmpbuf.\n");
+		pr_err("Unable to allocate %u + 1 bytes for tmpbuf.\n", length);
 		return -1;
 	}
 
@@ -1799,9 +1797,6 @@ void iscsi_set_connection_parameters(
 		 * this key is not sent over the wire.
 		 */
 		if (!strcmp(param->name, MAXXMITDATASEGMENTLENGTH)) {
-			if (param_list->iser == true)
-				continue;
-
 			ops->MaxXmitDataSegmentLength =
 				simple_strtoul(param->value, &tmpptr, 0);
 			pr_debug("MaxXmitDataSegmentLength:     %s\n",

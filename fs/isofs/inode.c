@@ -93,7 +93,7 @@ static void init_once(void *foo)
 	inode_init_once(&ei->vfs_inode);
 }
 
-static int init_inodecache(void)
+static int __init init_inodecache(void)
 {
 	isofs_inode_cachep = kmem_cache_create("isofs_inode_cache",
 					sizeof(struct iso_inode_info),
@@ -117,8 +117,9 @@ static void destroy_inodecache(void)
 
 static int isofs_remount(struct super_block *sb, int *flags, char *data)
 {
-	/* we probably want a lot more here */
-	*flags |= MS_RDONLY;
+	sync_filesystem(sb);
+	if (!(*flags & MS_RDONLY))
+		return -EROFS;
 	return 0;
 }
 
@@ -181,7 +182,7 @@ struct iso9660_options{
  * Compute the hash for the isofs name corresponding to the dentry.
  */
 static int
-isofs_hash_common(const struct dentry *dentry, struct qstr *qstr, int ms)
+isofs_hash_common(struct qstr *qstr, int ms)
 {
 	const char *name;
 	int len;
@@ -202,7 +203,7 @@ isofs_hash_common(const struct dentry *dentry, struct qstr *qstr, int ms)
  * Compute the hash for the isofs name corresponding to the dentry.
  */
 static int
-isofs_hashi_common(const struct dentry *dentry, struct qstr *qstr, int ms)
+isofs_hashi_common(struct qstr *qstr, int ms)
 {
 	const char *name;
 	int len;
@@ -259,13 +260,13 @@ static int isofs_dentry_cmp_common(
 static int
 isofs_hash(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hash_common(dentry, qstr, 0);
+	return isofs_hash_common(qstr, 0);
 }
 
 static int
 isofs_hashi(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hashi_common(dentry, qstr, 0);
+	return isofs_hashi_common(qstr, 0);
 }
 
 static int
@@ -286,13 +287,13 @@ isofs_dentry_cmpi(const struct dentry *parent, const struct dentry *dentry,
 static int
 isofs_hash_ms(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hash_common(dentry, qstr, 1);
+	return isofs_hash_common(qstr, 1);
 }
 
 static int
 isofs_hashi_ms(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hashi_common(dentry, qstr, 1);
+	return isofs_hashi_common(qstr, 1);
 }
 
 static int
@@ -762,15 +763,6 @@ root_found:
 	 * size of a file system, which is 8 TB.
 	 */
 	s->s_maxbytes = 0x80000000000LL;
-
-	/*
-	 * The CDROM is read-only, has no nodes (devices) on it, and since
-	 * all of the files appear to be owned by root, we really do not want
-	 * to allow suid.  (suid or devices will not show up unless we have
-	 * Rock Ridge extensions)
-	 */
-
-	s->s_flags |= MS_RDONLY /* | MS_NODEV | MS_NOSUID */;
 
 	/* Set this for reference. Its not currently used except on write
 	   which we don't have .. */
@@ -1530,6 +1522,9 @@ struct inode *isofs_iget(struct super_block *sb,
 static struct dentry *isofs_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
+	/* We don't support read-write mounts */
+	if (!(flags & MS_RDONLY))
+		return ERR_PTR(-EACCES);
 	return mount_bdev(fs_type, flags, dev_name, data, isofs_fill_super);
 }
 

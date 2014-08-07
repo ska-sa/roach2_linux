@@ -18,21 +18,22 @@
  */
 #include "xfs.h"
 #include "xfs_fs.h"
-#include "xfs_types.h"
+#include "xfs_shared.h"
+#include "xfs_format.h"
+#include "xfs_log_format.h"
+#include "xfs_trans_resv.h"
 #include "xfs_bit.h"
-#include "xfs_log.h"
-#include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
 #include "xfs_mount.h"
-#include "xfs_error.h"
+#include "xfs_da_format.h"
 #include "xfs_da_btree.h"
-#include "xfs_bmap_btree.h"
-#include "xfs_dinode.h"
 #include "xfs_inode.h"
 #include "xfs_alloc.h"
+#include "xfs_trans.h"
 #include "xfs_inode_item.h"
 #include "xfs_bmap.h"
+#include "xfs_bmap_util.h"
 #include "xfs_attr.h"
 #include "xfs_attr_leaf.h"
 #include "xfs_attr_remote.h"
@@ -40,6 +41,7 @@
 #include "xfs_trace.h"
 #include "xfs_cksum.h"
 #include "xfs_buf_item.h"
+#include "xfs_error.h"
 
 #define ATTR_RMTVALUE_MAPSIZE	1	/* # of map entries at once */
 
@@ -66,7 +68,6 @@ xfs_attr3_rmt_blocks(
  */
 static bool
 xfs_attr3_rmt_hdr_ok(
-	struct xfs_mount	*mp,
 	void			*ptr,
 	xfs_ino_t		ino,
 	uint32_t		offset,
@@ -108,7 +109,7 @@ xfs_attr3_rmt_verify(
 	if (be32_to_cpu(rmt->rm_bytes) > fsbsize - sizeof(*rmt))
 		return false;
 	if (be32_to_cpu(rmt->rm_offset) +
-				be32_to_cpu(rmt->rm_bytes) >= XATTR_SIZE_MAX)
+				be32_to_cpu(rmt->rm_bytes) > XATTR_SIZE_MAX)
 		return false;
 	if (rmt->rm_owner == 0)
 		return false;
@@ -123,8 +124,8 @@ xfs_attr3_rmt_read_verify(
 	struct xfs_mount *mp = bp->b_target->bt_mount;
 	char		*ptr;
 	int		len;
-	bool		corrupt = false;
 	xfs_daddr_t	bno;
+	int		blksize = mp->m_attr_geo->blksize;
 
 	/* no verification of non-crc buffers */
 	if (!xfs_sb_version_hascrc(&mp->m_sb))
@@ -133,27 +134,25 @@ xfs_attr3_rmt_read_verify(
 	ptr = bp->b_addr;
 	bno = bp->b_bn;
 	len = BBTOB(bp->b_length);
-	ASSERT(len >= XFS_LBSIZE(mp));
+	ASSERT(len >= blksize);
 
 	while (len > 0) {
-		if (!xfs_verify_cksum(ptr, XFS_LBSIZE(mp),
-				      XFS_ATTR3_RMT_CRC_OFF)) {
-			corrupt = true;
+		if (!xfs_verify_cksum(ptr, blksize, XFS_ATTR3_RMT_CRC_OFF)) {
+			xfs_buf_ioerror(bp, EFSBADCRC);
 			break;
 		}
-		if (!xfs_attr3_rmt_verify(mp, ptr, XFS_LBSIZE(mp), bno)) {
-			corrupt = true;
+		if (!xfs_attr3_rmt_verify(mp, ptr, blksize, bno)) {
+			xfs_buf_ioerror(bp, EFSCORRUPTED);
 			break;
 		}
-		len -= XFS_LBSIZE(mp);
-		ptr += XFS_LBSIZE(mp);
-		bno += mp->m_bsize;
+		len -= blksize;
+		ptr += blksize;
+		bno += BTOBB(blksize);
 	}
 
-	if (corrupt) {
-		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, mp, bp->b_addr);
-		xfs_buf_ioerror(bp, EFSCORRUPTED);
-	} else
+	if (bp->b_error)
+		xfs_verifier_error(bp);
+	else
 		ASSERT(len == 0);
 }
 
@@ -166,6 +165,7 @@ xfs_attr3_rmt_write_verify(
 	char		*ptr;
 	int		len;
 	xfs_daddr_t	bno;
+	int		blksize = mp->m_attr_geo->blksize;
 
 	/* no verification of non-crc buffers */
 	if (!xfs_sb_version_hascrc(&mp->m_sb))
@@ -174,13 +174,12 @@ xfs_attr3_rmt_write_verify(
 	ptr = bp->b_addr;
 	bno = bp->b_bn;
 	len = BBTOB(bp->b_length);
-	ASSERT(len >= XFS_LBSIZE(mp));
+	ASSERT(len >= blksize);
 
 	while (len > 0) {
-		if (!xfs_attr3_rmt_verify(mp, ptr, XFS_LBSIZE(mp), bno)) {
-			XFS_CORRUPTION_ERROR(__func__,
-					    XFS_ERRLEVEL_LOW, mp, bp->b_addr);
+		if (!xfs_attr3_rmt_verify(mp, ptr, blksize, bno)) {
 			xfs_buf_ioerror(bp, EFSCORRUPTED);
+			xfs_verifier_error(bp);
 			return;
 		}
 		if (bip) {
@@ -189,11 +188,11 @@ xfs_attr3_rmt_write_verify(
 			rmt = (struct xfs_attr3_rmt_hdr *)ptr;
 			rmt->rm_lsn = cpu_to_be64(bip->bli_item.li_lsn);
 		}
-		xfs_update_cksum(ptr, XFS_LBSIZE(mp), XFS_ATTR3_RMT_CRC_OFF);
+		xfs_update_cksum(ptr, blksize, XFS_ATTR3_RMT_CRC_OFF);
 
-		len -= XFS_LBSIZE(mp);
-		ptr += XFS_LBSIZE(mp);
-		bno += mp->m_bsize;
+		len -= blksize;
+		ptr += blksize;
+		bno += BTOBB(blksize);
 	}
 	ASSERT(len == 0);
 }
@@ -237,22 +236,23 @@ xfs_attr_rmtval_copyout(
 	xfs_ino_t	ino,
 	int		*offset,
 	int		*valuelen,
-	char		**dst)
+	__uint8_t	**dst)
 {
 	char		*src = bp->b_addr;
 	xfs_daddr_t	bno = bp->b_bn;
 	int		len = BBTOB(bp->b_length);
+	int		blksize = mp->m_attr_geo->blksize;
 
-	ASSERT(len >= XFS_LBSIZE(mp));
+	ASSERT(len >= blksize);
 
 	while (len > 0 && *valuelen > 0) {
 		int hdr_size = 0;
-		int byte_cnt = XFS_ATTR3_RMT_BUF_SPACE(mp, XFS_LBSIZE(mp));
+		int byte_cnt = XFS_ATTR3_RMT_BUF_SPACE(mp, blksize);
 
-		byte_cnt = min_t(int, *valuelen, byte_cnt);
+		byte_cnt = min(*valuelen, byte_cnt);
 
 		if (xfs_sb_version_hascrc(&mp->m_sb)) {
-			if (!xfs_attr3_rmt_hdr_ok(mp, src, ino, *offset,
+			if (!xfs_attr3_rmt_hdr_ok(src, ino, *offset,
 						  byte_cnt, bno)) {
 				xfs_alert(mp,
 "remote attribute header mismatch bno/off/len/owner (0x%llx/0x%x/Ox%x/0x%llx)",
@@ -265,9 +265,9 @@ xfs_attr_rmtval_copyout(
 		memcpy(*dst, src + hdr_size, byte_cnt);
 
 		/* roll buffer forwards */
-		len -= XFS_LBSIZE(mp);
-		src += XFS_LBSIZE(mp);
-		bno += mp->m_bsize;
+		len -= blksize;
+		src += blksize;
+		bno += BTOBB(blksize);
 
 		/* roll attribute data forwards */
 		*valuelen -= byte_cnt;
@@ -284,17 +284,18 @@ xfs_attr_rmtval_copyin(
 	xfs_ino_t	ino,
 	int		*offset,
 	int		*valuelen,
-	char		**src)
+	__uint8_t	**src)
 {
 	char		*dst = bp->b_addr;
 	xfs_daddr_t	bno = bp->b_bn;
 	int		len = BBTOB(bp->b_length);
+	int		blksize = mp->m_attr_geo->blksize;
 
-	ASSERT(len >= XFS_LBSIZE(mp));
+	ASSERT(len >= blksize);
 
 	while (len > 0 && *valuelen > 0) {
 		int hdr_size;
-		int byte_cnt = XFS_ATTR3_RMT_BUF_SPACE(mp, XFS_LBSIZE(mp));
+		int byte_cnt = XFS_ATTR3_RMT_BUF_SPACE(mp, blksize);
 
 		byte_cnt = min(*valuelen, byte_cnt);
 		hdr_size = xfs_attr3_rmt_hdr_set(mp, dst, ino, *offset,
@@ -306,17 +307,17 @@ xfs_attr_rmtval_copyin(
 		 * If this is the last block, zero the remainder of it.
 		 * Check that we are actually the last block, too.
 		 */
-		if (byte_cnt + hdr_size < XFS_LBSIZE(mp)) {
+		if (byte_cnt + hdr_size < blksize) {
 			ASSERT(*valuelen - byte_cnt == 0);
-			ASSERT(len == XFS_LBSIZE(mp));
+			ASSERT(len == blksize);
 			memset(dst + hdr_size + byte_cnt, 0,
-					XFS_LBSIZE(mp) - hdr_size - byte_cnt);
+					blksize - hdr_size - byte_cnt);
 		}
 
 		/* roll buffer forwards */
-		len -= XFS_LBSIZE(mp);
-		dst += XFS_LBSIZE(mp);
-		bno += mp->m_bsize;
+		len -= blksize;
+		dst += blksize;
+		bno += BTOBB(blksize);
 
 		/* roll attribute data forwards */
 		*valuelen -= byte_cnt;
@@ -337,8 +338,8 @@ xfs_attr_rmtval_get(
 	struct xfs_mount	*mp = args->dp->i_mount;
 	struct xfs_buf		*bp;
 	xfs_dablk_t		lblkno = args->rmtblkno;
-	char			*dst = args->value;
-	int			valuelen = args->valuelen;
+	__uint8_t		*dst = args->value;
+	int			valuelen;
 	int			nmap;
 	int			error;
 	int			blkcnt = args->rmtblkcnt;
@@ -348,7 +349,9 @@ xfs_attr_rmtval_get(
 	trace_xfs_attr_rmtval_get(args);
 
 	ASSERT(!(args->flags & ATTR_KERNOVAL));
+	ASSERT(args->rmtvaluelen == args->valuelen);
 
+	valuelen = args->rmtvaluelen;
 	while (valuelen > 0) {
 		nmap = ATTR_RMTVALUE_MAPSIZE;
 		error = xfs_bmapi_read(args->dp, (xfs_fileoff_t)lblkno,
@@ -401,7 +404,7 @@ xfs_attr_rmtval_set(
 	struct xfs_bmbt_irec	map;
 	xfs_dablk_t		lblkno;
 	xfs_fileoff_t		lfileoff = 0;
-	char			*src = args->value;
+	__uint8_t		*src = args->value;
 	int			blkcnt;
 	int			valuelen;
 	int			nmap;
@@ -416,7 +419,7 @@ xfs_attr_rmtval_set(
 	 * attributes have headers, we can't just do a straight byte to FSB
 	 * conversion and have to take the header space into account.
 	 */
-	blkcnt = xfs_attr3_rmt_blocks(mp, args->valuelen);
+	blkcnt = xfs_attr3_rmt_blocks(mp, args->rmtvaluelen);
 	error = xfs_bmap_first_unused(args->trans, args->dp, blkcnt, &lfileoff,
 						   XFS_ATTR_FORK);
 	if (error)
@@ -481,7 +484,7 @@ xfs_attr_rmtval_set(
 	 */
 	lblkno = args->rmtblkno;
 	blkcnt = args->rmtblkcnt;
-	valuelen = args->valuelen;
+	valuelen = args->rmtvaluelen;
 	while (valuelen > 0) {
 		struct xfs_buf	*bp;
 		xfs_daddr_t	dblkno;
@@ -543,11 +546,6 @@ xfs_attr_rmtval_remove(
 
 	/*
 	 * Roll through the "value", invalidating the attribute value's blocks.
-	 * Note that args->rmtblkcnt is the minimum number of data blocks we'll
-	 * see for a CRC enabled remote attribute. Each extent will have a
-	 * header, and so we may have more blocks than we realise here.  If we
-	 * fail to map the blocks correctly, we'll have problems with the buffer
-	 * lookups.
 	 */
 	lblkno = args->rmtblkno;
 	blkcnt = args->rmtblkcnt;
@@ -628,4 +626,3 @@ xfs_attr_rmtval_remove(
 	}
 	return(0);
 }
-

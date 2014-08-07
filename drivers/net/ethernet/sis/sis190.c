@@ -1770,9 +1770,6 @@ static void sis190_get_regs(struct net_device *dev, struct ethtool_regs *regs,
 	struct sis190_private *tp = netdev_priv(dev);
 	unsigned long flags;
 
-	if (regs->len > SIS190_REGS_SIZE)
-		regs->len = SIS190_REGS_SIZE;
-
 	spin_lock_irqsave(&tp->lock, flags);
 	memcpy_fromio(p, tp->mmio_addr, regs->len);
 	spin_unlock_irqrestore(&tp->lock, flags);
@@ -1880,7 +1877,7 @@ static int sis190_init_one(struct pci_dev *pdev,
 
 	dev->netdev_ops = &sis190_netdev_ops;
 
-	SET_ETHTOOL_OPS(dev, &sis190_ethtool_ops);
+	dev->ethtool_ops = &sis190_ethtool_ops;
 	dev->watchdog_timeo = SIS190_TX_TIMEOUT;
 
 	spin_lock_init(&tp->lock);
@@ -1924,7 +1921,6 @@ static void sis190_remove_one(struct pci_dev *pdev)
 	cancel_work_sync(&tp->phy_task);
 	unregister_netdev(dev);
 	sis190_release_board(pdev);
-	pci_set_drvdata(pdev, NULL);
 }
 
 static struct pci_driver sis190_pci_driver = {

@@ -12,7 +12,7 @@
  * license other than the GPL, without Broadcom's express prior written
  * consent.
  *
- * Maintained by: Eilon Greenstein <eilong@broadcom.com>
+ * Maintained by: Ariel Elior <ariel.elior@qlogic.com>
  * Written by: Vladislav Zolotarov
  *
  */
@@ -266,6 +266,13 @@ enum {
 	BNX2X_DONT_CONSUME_CAM_CREDIT,
 	BNX2X_DONT_CONSUME_CAM_CREDIT_DEST,
 };
+/* When looking for matching filters, some flags are not interesting */
+#define BNX2X_VLAN_MAC_CMP_MASK	(1 << BNX2X_UC_LIST_MAC | \
+				 1 << BNX2X_ETH_MAC | \
+				 1 << BNX2X_ISCSI_ETH_MAC | \
+				 1 << BNX2X_NETQ_ETH_MAC)
+#define BNX2X_VLAN_MAC_CMP_FLAGS(flags) \
+	((flags) & BNX2X_VLAN_MAC_CMP_MASK)
 
 struct bnx2x_vlan_mac_ramrod_params {
 	/* Object to run the command from */
@@ -285,6 +292,12 @@ struct bnx2x_vlan_mac_obj {
 	 * entries.
 	 */
 	struct list_head		head;
+	/* Implement a simple reader/writer lock on the head list.
+	 * all these fields should only be accessed under the exe_queue lock
+	 */
+	u8		head_reader; /* Num. of readers accessing head list */
+	bool		head_exe_request; /* Pending execution request. */
+	unsigned long	saved_ramrod_flags; /* Ramrods of pending execution */
 
 	/* TODO: Add it's initialization in the init functions */
 	struct bnx2x_exe_queue_obj	exe_queue;
@@ -434,9 +447,6 @@ enum {
 	BNX2X_LLH_CAM_ETH_LINE,
 	BNX2X_LLH_CAM_MAX_PF_LINE = NIG_REG_LLH1_FUNC_MEM_SIZE / 2
 };
-
-void bnx2x_set_mac_in_nig(struct bnx2x *bp,
-			  bool add, unsigned char *dev_addr, int index);
 
 /** RX_MODE verbs:DROP_ALL/ACCEPT_ALL/ACCEPT_ALL_MULTI/ACCEPT_ALL_VLAN/NORMAL */
 
@@ -757,7 +767,9 @@ enum {
 	BNX2X_Q_UPDATE_DEF_VLAN_EN,
 	BNX2X_Q_UPDATE_DEF_VLAN_EN_CHNG,
 	BNX2X_Q_UPDATE_SILENT_VLAN_REM_CHNG,
-	BNX2X_Q_UPDATE_SILENT_VLAN_REM
+	BNX2X_Q_UPDATE_SILENT_VLAN_REM,
+	BNX2X_Q_UPDATE_TX_SWITCHING_CHNG,
+	BNX2X_Q_UPDATE_TX_SWITCHING
 };
 
 /* Allowed Queue states */
@@ -881,6 +893,24 @@ struct bnx2x_queue_update_params {
 	u8		cid_index;
 };
 
+struct bnx2x_queue_update_tpa_params {
+	dma_addr_t sge_map;
+	u8 update_ipv4;
+	u8 update_ipv6;
+	u8 max_tpa_queues;
+	u8 max_sges_pkt;
+	u8 complete_on_both_clients;
+	u8 dont_verify_thr;
+	u8 tpa_mode;
+	u8 _pad;
+
+	u16 sge_buff_sz;
+	u16 max_agg_sz;
+
+	u16 sge_pause_thr_low;
+	u16 sge_pause_thr_high;
+};
+
 struct rxq_pause_params {
 	u16		bd_th_lo;
 	u16		bd_th_hi;
@@ -975,6 +1005,7 @@ struct bnx2x_queue_state_params {
 	/* Params according to the current command */
 	union {
 		struct bnx2x_queue_update_params	update;
+		struct bnx2x_queue_update_tpa_params    update_tpa;
 		struct bnx2x_queue_setup_params		setup;
 		struct bnx2x_queue_init_params		init;
 		struct bnx2x_queue_setup_tx_only_params	tx_only;
@@ -1294,16 +1325,14 @@ void bnx2x_init_vlan_obj(struct bnx2x *bp,
 			 unsigned long *pstate, bnx2x_obj_type type,
 			 struct bnx2x_credit_pool_obj *vlans_pool);
 
-void bnx2x_init_vlan_mac_obj(struct bnx2x *bp,
-			     struct bnx2x_vlan_mac_obj *vlan_mac_obj,
-			     u8 cl_id, u32 cid, u8 func_id, void *rdata,
-			     dma_addr_t rdata_mapping, int state,
-			     unsigned long *pstate, bnx2x_obj_type type,
-			     struct bnx2x_credit_pool_obj *macs_pool,
-			     struct bnx2x_credit_pool_obj *vlans_pool);
-
+int bnx2x_vlan_mac_h_read_lock(struct bnx2x *bp,
+					struct bnx2x_vlan_mac_obj *o);
+void bnx2x_vlan_mac_h_read_unlock(struct bnx2x *bp,
+				  struct bnx2x_vlan_mac_obj *o);
+int bnx2x_vlan_mac_h_write_lock(struct bnx2x *bp,
+				struct bnx2x_vlan_mac_obj *o);
 int bnx2x_config_vlan_mac(struct bnx2x *bp,
-			  struct bnx2x_vlan_mac_ramrod_params *p);
+			   struct bnx2x_vlan_mac_ramrod_params *p);
 
 int bnx2x_vlan_mac_move(struct bnx2x *bp,
 			struct bnx2x_vlan_mac_ramrod_params *p,

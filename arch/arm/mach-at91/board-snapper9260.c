@@ -26,7 +26,7 @@
 #include <linux/gpio.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
-#include <linux/i2c/pca953x.h>
+#include <linux/platform_data/pca953x.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
@@ -38,6 +38,7 @@
 #include "board.h"
 #include "sam9_smc.h"
 #include "generic.h"
+#include "gpio.h"
 
 #define SNAPPER9260_IO_EXP_GPIO(x)	(NR_BUILTIN_GPIO + (x))
 

@@ -6,11 +6,21 @@
 
 #define UNCORE_PMU_NAME_LEN		32
 #define UNCORE_PMU_HRTIMER_INTERVAL	(60LL * NSEC_PER_SEC)
+#define UNCORE_SNB_IMC_HRTIMER_INTERVAL (5ULL * NSEC_PER_SEC)
 
 #define UNCORE_FIXED_EVENT		0xff
 #define UNCORE_PMC_IDX_MAX_GENERIC	8
 #define UNCORE_PMC_IDX_FIXED		UNCORE_PMC_IDX_MAX_GENERIC
 #define UNCORE_PMC_IDX_MAX		(UNCORE_PMC_IDX_FIXED + 1)
+
+#define UNCORE_PCI_DEV_DATA(type, idx)	((type << 8) | idx)
+#define UNCORE_PCI_DEV_TYPE(data)	((data >> 8) & 0xff)
+#define UNCORE_PCI_DEV_IDX(data)	(data & 0xff)
+#define UNCORE_EXTRA_PCI_DEV		0xff
+#define UNCORE_EXTRA_PCI_DEV_MAX	2
+
+/* support up to 8 sockets */
+#define UNCORE_SOCKET_MAX		8
 
 #define UNCORE_EVENT_CONSTRAINT(c, n) EVENT_CONSTRAINT(c, n, 0xff)
 
@@ -108,6 +118,7 @@
 				(SNBEP_PMON_CTL_EV_SEL_MASK | \
 				 SNBEP_PCU_MSR_PMON_CTL_OCC_SEL_MASK | \
 				 SNBEP_PMON_CTL_EDGE_DET | \
+				 SNBEP_PMON_CTL_EV_SEL_EXT | \
 				 SNBEP_PMON_CTL_INVERT | \
 				 SNBEP_PCU_MSR_PMON_CTL_TRESH_MASK | \
 				 SNBEP_PCU_MSR_PMON_CTL_OCC_INVERT | \
@@ -430,6 +441,7 @@ struct intel_uncore_type {
 	struct intel_uncore_ops *ops;
 	struct uncore_event_desc *event_descs;
 	const struct attribute_group *attr_groups[4];
+	struct pmu *pmu; /* for custom pmu ops */
 };
 
 #define pmu_group attr_groups[0]
@@ -478,8 +490,11 @@ struct intel_uncore_box {
 	u64 tags[UNCORE_PMC_IDX_MAX];
 	struct pci_dev *pci_dev;
 	struct intel_uncore_pmu *pmu;
+	u64 hrtimer_duration; /* hrtimer timeout for this box */
 	struct hrtimer hrtimer;
 	struct list_head list;
+	struct list_head active_list;
+	void *io_addr;
 	struct intel_uncore_extra_reg shared_regs[0];
 };
 

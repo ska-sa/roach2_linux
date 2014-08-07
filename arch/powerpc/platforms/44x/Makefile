@@ -13,3 +13,5 @@ obj-$(CONFIG_CANYONLANDS)+= canyonlands.o
 obj-$(CONFIG_CURRITUCK)	+= currituck.o
 obj-$(CONFIG_ROACH)	+= roach.o
 obj-$(CONFIG_ROACH2)	+= roach2.o
+obj-$(CONFIG_CURRITUCK)	+= ppc476.o
+obj-$(CONFIG_AKEBONO)	+= ppc476.o

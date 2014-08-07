@@ -74,7 +74,7 @@ static int numachip_phys_pkg_id(int initial_apic_id, int index_msb)
 	return initial_apic_id >> index_msb;
 }
 
-static int __cpuinit numachip_wakeup_secondary(int phys_apicid, unsigned long start_rip)
+static int numachip_wakeup_secondary(int phys_apicid, unsigned long start_rip)
 {
 	union numachip_csr_g3_ext_irq_gen int_gen;
 
@@ -248,7 +248,7 @@ static const struct apic apic_numachip __refconst = {
 	.wakeup_secondary_cpu		= numachip_wakeup_secondary,
 	.trampoline_phys_low		= DEFAULT_TRAMPOLINE_PHYS_LOW,
 	.trampoline_phys_high		= DEFAULT_TRAMPOLINE_PHYS_HIGH,
-	.wait_for_init_deassert		= NULL,
+	.wait_for_init_deassert		= false,
 	.smp_callin_clear_local_apic	= NULL,
 	.inquire_remote_apic		= NULL, /* REMRD not supported */
 

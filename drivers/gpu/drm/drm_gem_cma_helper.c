@@ -27,11 +27,7 @@
 #include <drm/drmP.h>
 #include <drm/drm.h>
 #include <drm/drm_gem_cma_helper.h>
-
-static unsigned int get_gem_mmap_offset(struct drm_gem_object *obj)
-{
-	return (unsigned int)obj->map_list.hash.key << PAGE_SHIFT;
-}
+#include <drm/drm_vma_manager.h>
 
 /*
  * __drm_gem_cma_create - Create a GEM CMA object without allocating memory
@@ -83,7 +79,6 @@ struct drm_gem_cma_object *drm_gem_cma_create(struct drm_device *drm,
 		unsigned int size)
 {
 	struct drm_gem_cma_object *cma_obj;
-	struct sg_table *sgt = NULL;
 	int ret;
 
 	size = round_up(size, PAGE_SIZE);
@@ -101,23 +96,9 @@ struct drm_gem_cma_object *drm_gem_cma_create(struct drm_device *drm,
 		goto error;
 	}
 
-	sgt = kzalloc(sizeof(*cma_obj->sgt), GFP_KERNEL);
-	if (sgt == NULL) {
-		ret = -ENOMEM;
-		goto error;
-	}
-
-	ret = dma_get_sgtable(drm->dev, sgt, cma_obj->vaddr,
-			      cma_obj->paddr, size);
-	if (ret < 0)
-		goto error;
-
-	cma_obj->sgt = sgt;
-
 	return cma_obj;
 
 error:
-	kfree(sgt);
 	drm_gem_cma_free_object(&cma_obj->base);
 	return ERR_PTR(ret);
 }
@@ -172,18 +153,13 @@ void drm_gem_cma_free_object(struct drm_gem_object *gem_obj)
 {
 	struct drm_gem_cma_object *cma_obj;
 
-	if (gem_obj->map_list.map)
-		drm_gem_free_mmap_offset(gem_obj);
+	drm_gem_free_mmap_offset(gem_obj);
 
 	cma_obj = to_drm_gem_cma_obj(gem_obj);
 
 	if (cma_obj->vaddr) {
 		dma_free_writecombine(gem_obj->dev->dev, cma_obj->base.size,
 				      cma_obj->vaddr, cma_obj->paddr);
-		if (cma_obj->sgt) {
-			sg_free_table(cma_obj->sgt);
-			kfree(cma_obj->sgt);
-		}
 	} else if (gem_obj->import_attach) {
 		drm_prime_gem_destroy(gem_obj, cma_obj->sgt);
 	}
@@ -215,7 +191,7 @@ int drm_gem_cma_dumb_create(struct drm_file *file_priv,
 
 	cma_obj = drm_gem_cma_create_with_handle(file_priv, dev,
 			args->size, &args->handle);
-	return PTR_RET(cma_obj);
+	return PTR_ERR_OR_ZERO(cma_obj);
 }
 EXPORT_SYMBOL_GPL(drm_gem_cma_dumb_create);
 
@@ -237,7 +213,7 @@ int drm_gem_cma_dumb_map_offset(struct drm_file *file_priv,
 		return -EINVAL;
 	}
 
-	*offset = get_gem_mmap_offset(gem_obj);
+	*offset = drm_vma_node_offset_addr(&gem_obj->vma_node);
 
 	drm_gem_object_unreference(gem_obj);
 
@@ -258,8 +234,17 @@ static int drm_gem_cma_mmap_obj(struct drm_gem_cma_object *cma_obj,
 {
 	int ret;
 
-	ret = remap_pfn_range(vma, vma->vm_start, cma_obj->paddr >> PAGE_SHIFT,
-			vma->vm_end - vma->vm_start, vma->vm_page_prot);
+	/*
+	 * Clear the VM_PFNMAP flag that was set by drm_gem_mmap(), and set the
+	 * vm_pgoff (used as a fake buffer offset by DRM) to 0 as we want to map
+	 * the whole buffer.
+	 */
+	vma->vm_flags &= ~VM_PFNMAP;
+	vma->vm_pgoff = 0;
+
+	ret = dma_mmap_writecombine(cma_obj->base.dev->dev, vma,
+				    cma_obj->vaddr, cma_obj->paddr,
+				    vma->vm_end - vma->vm_start);
 	if (ret)
 		drm_gem_vm_close(vma);
 
@@ -286,31 +271,20 @@ int drm_gem_cma_mmap(struct file *filp, struct vm_area_struct *vma)
 }
 EXPORT_SYMBOL_GPL(drm_gem_cma_mmap);
 
-/*
- * drm_gem_cma_dumb_destroy - (struct drm_driver)->dumb_destroy callback function
- */
-int drm_gem_cma_dumb_destroy(struct drm_file *file_priv,
-		struct drm_device *drm, unsigned int handle)
-{
-	return drm_gem_handle_delete(file_priv, handle);
-}
-EXPORT_SYMBOL_GPL(drm_gem_cma_dumb_destroy);
-
 #ifdef CONFIG_DEBUG_FS
 void drm_gem_cma_describe(struct drm_gem_cma_object *cma_obj, struct seq_file *m)
 {
 	struct drm_gem_object *obj = &cma_obj->base;
 	struct drm_device *dev = obj->dev;
-	uint64_t off = 0;
+	uint64_t off;
 
 	WARN_ON(!mutex_is_locked(&dev->struct_mutex));
 
-	if (obj->map_list.map)
-		off = (uint64_t)obj->map_list.hash.key;
+	off = drm_vma_node_start(&obj->vma_node);
 
-	seq_printf(m, "%2d (%2d) %08llx %08Zx %p %d",
+	seq_printf(m, "%2d (%2d) %08llx %pad %p %d",
 			obj->name, obj->refcount.refcount.counter,
-			off, cma_obj->paddr, cma_obj->vaddr, obj->size);
+			off, &cma_obj->paddr, cma_obj->vaddr, obj->size);
 
 	seq_printf(m, "\n");
 }
@@ -358,7 +332,7 @@ drm_gem_cma_prime_import_sg_table(struct drm_device *dev, size_t size,
 	cma_obj->paddr = sg_dma_address(sgt->sgl);
 	cma_obj->sgt = sgt;
 
-	DRM_DEBUG_PRIME("dma_addr = 0x%x, size = %zu\n", cma_obj->paddr, size);
+	DRM_DEBUG_PRIME("dma_addr = %pad, size = %zu\n", &cma_obj->paddr, size);
 
 	return &cma_obj->base;
 }

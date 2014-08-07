@@ -24,16 +24,12 @@
  * See the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with GNU CC; see the file COPYING.  If not, write to
- * the Free Software Foundation, 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
+ * along with GNU CC; see the file COPYING.  If not, see
+ * <http://www.gnu.org/licenses/>.
  *
  * Please send any bug reports or fixes you make to the
  * email address(es):
- *    lksctp developers <lksctp-developers@lists.sourceforge.net>
- *
- * Or submit a bug report through the following website:
- *    http://www.sf.net/projects/lksctp
+ *    lksctp developers <linux-sctp@vger.kernel.org>
  *
  * Written or modified by:
  *    La Monte H.P. Yarroll <piggy@acm.org>
@@ -43,9 +39,6 @@
  *    Hui Huang             <hui.huang@nokia.com>
  *    Sridhar Samudrala	    <sri@us.ibm.com>
  *    Ardelle Fan	    <ardelle.fan@intel.com>
- *
- * Any bugs reported given to us we will try to fix... any fixes shared will
- * be incorporated into the next SCTP release.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -79,7 +72,7 @@ static struct sctp_transport *sctp_transport_init(struct net *net,
 	 */
 	peer->rto = msecs_to_jiffies(net->sctp.rto_initial);
 
-	peer->last_time_heard = jiffies;
+	peer->last_time_heard = ktime_get();
 	peer->last_time_ecne_reduced = jiffies;
 
 	peer->param_flags = SPP_HB_DISABLE |
@@ -181,12 +174,12 @@ static void sctp_transport_destroy(struct sctp_transport *transport)
 		return;
 	}
 
-	call_rcu(&transport->rcu, sctp_transport_destroy_rcu);
-
 	sctp_packet_free(&transport->packet);
 
 	if (transport->asoc)
 		sctp_association_put(transport->asoc);
+
+	call_rcu(&transport->rcu, sctp_transport_destroy_rcu);
 }
 
 /* Start T3_rtx timer if it is not already running and update the heartbeat
@@ -579,7 +572,7 @@ void sctp_transport_burst_limited(struct sctp_transport *t)
 	u32 old_cwnd = t->cwnd;
 	u32 max_burst_bytes;
 
-	if (t->burst_limited)
+	if (t->burst_limited || asoc->max_burst == 0)
 		return;
 
 	max_burst_bytes = t->flight_size + (asoc->max_burst * asoc->pathmtu);
@@ -659,5 +652,4 @@ void sctp_transport_immediate_rtx(struct sctp_transport *t)
 		if (!mod_timer(&t->T3_rtx_timer, jiffies + t->rto))
 			sctp_transport_hold(t);
 	}
-	return;
 }

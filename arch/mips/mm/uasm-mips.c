@@ -15,7 +15,6 @@
 
 #include <linux/kernel.h>
 #include <linux/types.h>
-#include <linux/init.h>
 
 #include <asm/inst.h>
 #include <asm/elf.h>
@@ -49,7 +48,7 @@
 
 #include "uasm.c"
 
-static struct insn insn_table[] __uasminitdata = {
+static struct insn insn_table[] = {
 	{ insn_addiu, M(addiu_op, 0, 0, 0, 0, 0), RS | RT | SIMM },
 	{ insn_addu, M(spec_op, 0, 0, 0, 0, addu_op), RS | RT | RD },
 	{ insn_andi, M(andi_op, 0, 0, 0, 0, 0), RS | RT | UIMM },
@@ -68,6 +67,7 @@ static struct insn insn_table[] __uasminitdata = {
 	{ insn_daddu, M(spec_op, 0, 0, 0, 0, daddu_op), RS | RT | RD },
 	{ insn_dinsm, M(spec3_op, 0, 0, 0, 0, dinsm_op), RS | RT | RD | RE },
 	{ insn_dins, M(spec3_op, 0, 0, 0, 0, dins_op), RS | RT | RD | RE },
+	{ insn_divu, M(spec_op, 0, 0, 0, 0, divu_op), RS | RT },
 	{ insn_dmfc0, M(cop0_op, dmfc_op, 0, 0, 0, 0), RT | RD | SET},
 	{ insn_dmtc0, M(cop0_op, dmtc_op, 0, 0, 0, 0), RT | RD | SET},
 	{ insn_drotr32, M(spec_op, 1, 0, 0, 0, dsrl32_op), RT | RD | RE },
@@ -83,17 +83,23 @@ static struct insn insn_table[] __uasminitdata = {
 	{ insn_ins, M(spec3_op, 0, 0, 0, 0, ins_op), RS | RT | RD | RE },
 	{ insn_j,  M(j_op, 0, 0, 0, 0, 0),  JIMM },
 	{ insn_jal,  M(jal_op, 0, 0, 0, 0, 0),	JIMM },
+	{ insn_jalr,  M(spec_op, 0, 0, 0, 0, jalr_op), RS | RD },
 	{ insn_j,  M(j_op, 0, 0, 0, 0, 0),  JIMM },
 	{ insn_jr,  M(spec_op, 0, 0, 0, 0, jr_op),  RS },
+	{ insn_lb, M(lb_op, 0, 0, 0, 0, 0), RS | RT | SIMM },
 	{ insn_ld,  M(ld_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_ldx, M(spec3_op, 0, 0, 0, ldx_op, lx_op), RS | RT | RD },
+	{ insn_lh,  M(lh_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_lld,  M(lld_op, 0, 0, 0, 0, 0),	RS | RT | SIMM },
 	{ insn_ll,  M(ll_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_lui,  M(lui_op, 0, 0, 0, 0, 0),	RT | SIMM },
 	{ insn_lw,  M(lw_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_lwx, M(spec3_op, 0, 0, 0, lwx_op, lx_op), RS | RT | RD },
 	{ insn_mfc0,  M(cop0_op, mfc_op, 0, 0, 0, 0),  RT | RD | SET},
+	{ insn_mfhi,  M(spec_op, 0, 0, 0, 0, mfhi_op), RD },
+	{ insn_mflo,  M(spec_op, 0, 0, 0, 0, mflo_op), RD },
 	{ insn_mtc0,  M(cop0_op, mtc_op, 0, 0, 0, 0),  RT | RD | SET},
+	{ insn_mul, M(spec2_op, 0, 0, 0, 0, mul_op), RS | RT | RD},
 	{ insn_ori,  M(ori_op, 0, 0, 0, 0, 0),	RS | RT | UIMM },
 	{ insn_or,  M(spec_op, 0, 0, 0, 0, or_op),  RS | RT | RD },
 	{ insn_pref,  M(pref_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
@@ -103,23 +109,32 @@ static struct insn insn_table[] __uasminitdata = {
 	{ insn_sc,  M(sc_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_sd,  M(sd_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_sll,  M(spec_op, 0, 0, 0, 0, sll_op),  RT | RD | RE },
+	{ insn_sllv,  M(spec_op, 0, 0, 0, 0, sllv_op),  RS | RT | RD },
+	{ insn_slt,  M(spec_op, 0, 0, 0, 0, slt_op),  RS | RT | RD },
+	{ insn_sltiu, M(sltiu_op, 0, 0, 0, 0, 0), RS | RT | SIMM },
+	{ insn_sltu, M(spec_op, 0, 0, 0, 0, sltu_op), RS | RT | RD },
 	{ insn_sra,  M(spec_op, 0, 0, 0, 0, sra_op),  RT | RD | RE },
 	{ insn_srl,  M(spec_op, 0, 0, 0, 0, srl_op),  RT | RD | RE },
+	{ insn_srlv,  M(spec_op, 0, 0, 0, 0, srlv_op),  RS | RT | RD },
 	{ insn_subu,  M(spec_op, 0, 0, 0, 0, subu_op),	RS | RT | RD },
 	{ insn_sw,  M(sw_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_sync, M(spec_op, 0, 0, 0, 0, sync_op), RE },
 	{ insn_syscall, M(spec_op, 0, 0, 0, 0, syscall_op), SCIMM},
 	{ insn_tlbp,  M(cop0_op, cop_op, 0, 0, 0, tlbp_op),  0 },
 	{ insn_tlbr,  M(cop0_op, cop_op, 0, 0, 0, tlbr_op),  0 },
 	{ insn_tlbwi,  M(cop0_op, cop_op, 0, 0, 0, tlbwi_op),  0 },
 	{ insn_tlbwr,  M(cop0_op, cop_op, 0, 0, 0, tlbwr_op),  0 },
+	{ insn_wait, M(cop0_op, cop_op, 0, 0, 0, wait_op), SCIMM },
+	{ insn_wsbh, M(spec3_op, 0, 0, 0, wsbh_op, bshfl_op), RT | RD },
 	{ insn_xori,  M(xori_op, 0, 0, 0, 0, 0),  RS | RT | UIMM },
 	{ insn_xor,  M(spec_op, 0, 0, 0, 0, xor_op),  RS | RT | RD },
+	{ insn_yield, M(spec3_op, 0, 0, 0, 0, yield_op), RS | RD },
 	{ insn_invalid, 0, 0 }
 };
 
 #undef M
 
-static inline __uasminit u32 build_bimm(s32 arg)
+static inline u32 build_bimm(s32 arg)
 {
 	WARN(arg > 0x1ffff || arg < -0x20000,
 	     KERN_WARNING "Micro-assembler field overflow\n");
@@ -129,7 +144,7 @@ static inline __uasminit u32 build_bimm(s32 arg)
 	return ((arg < 0) ? (1 << 15) : 0) | ((arg >> 2) & 0x7fff);
 }
 
-static inline __uasminit u32 build_jimm(u32 arg)
+static inline u32 build_jimm(u32 arg)
 {
 	WARN(arg & ~(JIMM_MASK << 2),
 	     KERN_WARNING "Micro-assembler field overflow\n");
@@ -141,7 +156,7 @@ static inline __uasminit u32 build_jimm(u32 arg)
  * The order of opcode arguments is implicitly left to right,
  * starting with RS and ending with FUNC or IMM.
  */
-static void __uasminit build_insn(u32 **buf, enum opcode opc, ...)
+static void build_insn(u32 **buf, enum opcode opc, ...)
 {
 	struct insn *ip = NULL;
 	unsigned int i;
@@ -187,7 +202,7 @@ static void __uasminit build_insn(u32 **buf, enum opcode opc, ...)
 	(*buf)++;
 }
 
-static inline void __uasminit
+static inline void
 __resolve_relocs(struct uasm_reloc *rel, struct uasm_label *lab)
 {
 	long laddr = (long)lab->addr;

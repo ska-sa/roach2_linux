@@ -38,6 +38,10 @@ struct ip_tunnel_prl_entry {
 	struct rcu_head			rcu_head;
 };
 
+struct ip_tunnel_dst {
+	struct dst_entry __rcu 		*dst;
+};
+
 struct ip_tunnel {
 	struct ip_tunnel __rcu	*next;
 	struct hlist_node hash_node;
@@ -53,6 +57,8 @@ struct ip_tunnel {
 	__u32		o_seqno;	/* The last output seqno */
 	int		hlen;		/* Precalculated header length */
 	int		mlink;
+
+	struct ip_tunnel_dst __percpu *dst_cache;
 
 	struct ip_tunnel_parm parms;
 
@@ -86,12 +92,12 @@ struct tnl_ptk_info {
 #define PACKET_RCVD	0
 #define PACKET_REJECT	1
 
-#define IP_TNL_HASH_BITS   10
+#define IP_TNL_HASH_BITS   7
 #define IP_TNL_HASH_SIZE   (1 << IP_TNL_HASH_BITS)
 
 struct ip_tunnel_net {
-	struct hlist_head *tunnels;
 	struct net_device *fb_tunnel_dev;
+	struct hlist_head tunnels[IP_TNL_HASH_SIZE];
 };
 
 #ifdef CONFIG_INET
@@ -102,7 +108,7 @@ void  ip_tunnel_dellink(struct net_device *dev, struct list_head *head);
 int ip_tunnel_init_net(struct net *net, int ip_tnl_net_id,
 		       struct rtnl_link_ops *ops, char *devname);
 
-void ip_tunnel_delete_net(struct ip_tunnel_net *itn);
+void ip_tunnel_delete_net(struct ip_tunnel_net *itn, struct rtnl_link_ops *ops);
 
 void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 		    const struct iphdr *tnl_params, const u8 protocol);
@@ -123,6 +129,7 @@ int ip_tunnel_changelink(struct net_device *dev, struct nlattr *tb[],
 int ip_tunnel_newlink(struct net_device *dev, struct nlattr *tb[],
 		      struct ip_tunnel_parm *p);
 void ip_tunnel_setup(struct net_device *dev, int net_id);
+void ip_tunnel_dst_reset_all(struct ip_tunnel *t);
 
 /* Extract dsfield from inner protocol */
 static inline u8 ip_tunnel_get_dsfield(const struct iphdr *iph,
@@ -145,32 +152,20 @@ static inline u8 ip_tunnel_ecn_encap(u8 tos, const struct iphdr *iph,
 	return INET_ECN_encapsulate(tos, inner);
 }
 
-static inline void tunnel_ip_select_ident(struct sk_buff *skb,
-					  const struct iphdr  *old_iph,
-					  struct dst_entry *dst)
-{
-	struct iphdr *iph = ip_hdr(skb);
-
-	/* Use inner packet iph-id if possible. */
-	if (skb->protocol == htons(ETH_P_IP) && old_iph->id)
-		iph->id	= old_iph->id;
-	else
-		__ip_select_ident(iph, dst,
-				  (skb_shinfo(skb)->gso_segs ?: 1) - 1);
-}
-
 int iptunnel_pull_header(struct sk_buff *skb, int hdr_len, __be16 inner_proto);
-int iptunnel_xmit(struct net *net, struct rtable *rt,
-		  struct sk_buff *skb,
+int iptunnel_xmit(struct sock *sk, struct rtable *rt, struct sk_buff *skb,
 		  __be32 src, __be32 dst, __u8 proto,
-		  __u8 tos, __u8 ttl, __be16 df);
+		  __u8 tos, __u8 ttl, __be16 df, bool xnet);
+
+struct sk_buff *iptunnel_handle_offloads(struct sk_buff *skb, bool gre_csum,
+					 int gso_type_mask);
 
 static inline void iptunnel_xmit_stats(int err,
 				       struct net_device_stats *err_stats,
-				       struct pcpu_tstats __percpu *stats)
+				       struct pcpu_sw_netstats __percpu *stats)
 {
 	if (err > 0) {
-		struct pcpu_tstats *tstats = this_cpu_ptr(stats);
+		struct pcpu_sw_netstats *tstats = this_cpu_ptr(stats);
 
 		u64_stats_update_begin(&tstats->syncp);
 		tstats->tx_bytes += err;

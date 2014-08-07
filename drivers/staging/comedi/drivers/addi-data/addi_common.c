@@ -85,10 +85,9 @@ static int addi_auto_attach(struct comedi_device *dev,
 
 	dev->board_name = this_board->pc_DriverName;
 
-	devpriv = kzalloc(sizeof(*devpriv), GFP_KERNEL);
+	devpriv = comedi_alloc_devpriv(dev, sizeof(*devpriv));
 	if (!devpriv)
 		return -ENOMEM;
-	dev->private = devpriv;
 
 	ret = comedi_pci_enable(dev);
 	if (ret)
@@ -158,14 +157,10 @@ static int addi_auto_attach(struct comedi_device *dev,
 		s->subdev_flags =
 			SDF_READABLE | SDF_COMMON | SDF_GROUND
 			| SDF_DIFF;
-		if (devpriv->s_EeParameters.i_NbrAiChannel) {
-			s->n_chan =
-				devpriv->s_EeParameters.i_NbrAiChannel;
-			devpriv->b_SingelDiff = 0;
-		} else {
+		if (devpriv->s_EeParameters.i_NbrAiChannel)
+			s->n_chan = devpriv->s_EeParameters.i_NbrAiChannel;
+		else
 			s->n_chan = this_board->i_NbrAiChannelDiff;
-			devpriv->b_SingelDiff = 1;
-		}
 		s->maxdata = devpriv->s_EeParameters.i_AiMaxdata;
 		s->len_chanlist = this_board->i_AiChannelList;
 		s->range_table = this_board->pr_AiRangelist;
@@ -205,7 +200,6 @@ static int addi_auto_attach(struct comedi_device *dev,
 		s->len_chanlist =
 			devpriv->s_EeParameters.i_NbrDiChannel;
 		s->range_table = &range_digital;
-		s->io_bits = 0;	/* all bits input */
 		s->insn_config = this_board->di_config;
 		s->insn_read = this_board->di_read;
 		s->insn_write = this_board->di_write;
@@ -224,7 +218,6 @@ static int addi_auto_attach(struct comedi_device *dev,
 		s->len_chanlist =
 			devpriv->s_EeParameters.i_NbrDoChannel;
 		s->range_table = &range_digital;
-		s->io_bits = 0xf;	/* all bits output */
 
 		/* insn_config - for digital output memory */
 		s->insn_config = this_board->do_config;

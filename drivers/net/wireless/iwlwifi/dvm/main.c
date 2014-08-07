@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
@@ -128,7 +128,6 @@ int iwlagn_send_beacon_cmd(struct iwl_priv *priv)
 	struct iwl_tx_beacon_cmd *tx_beacon_cmd;
 	struct iwl_host_cmd cmd = {
 		.id = REPLY_TX_BEACON,
-		.flags = CMD_SYNC,
 	};
 	struct ieee80211_tx_info *info;
 	u32 frame_size;
@@ -252,13 +251,17 @@ static void iwl_bg_bt_runtime_config(struct work_struct *work)
 	struct iwl_priv *priv =
 		container_of(work, struct iwl_priv, bt_runtime_config);
 
+	mutex_lock(&priv->mutex);
 	if (test_bit(STATUS_EXIT_PENDING, &priv->status))
-		return;
+		goto out;
 
 	/* dont send host command if rf-kill is on */
 	if (!iwl_is_ready_rf(priv))
-		return;
+		goto out;
+
 	iwlagn_send_advance_bt_config(priv);
+out:
+	mutex_unlock(&priv->mutex);
 }
 
 static void iwl_bg_bt_full_concurrency(struct work_struct *work)
@@ -307,8 +310,7 @@ int iwl_send_statistics_request(struct iwl_priv *priv, u8 flags, bool clear)
 					sizeof(struct iwl_statistics_cmd),
 					&statistics_cmd);
 	else
-		return iwl_dvm_send_cmd_pdu(priv, REPLY_STATISTICS_CMD,
-					CMD_SYNC,
+		return iwl_dvm_send_cmd_pdu(priv, REPLY_STATISTICS_CMD, 0,
 					sizeof(struct iwl_statistics_cmd),
 					&statistics_cmd);
 }
@@ -587,11 +589,6 @@ static void iwl_init_context(struct iwl_priv *priv, u32 ucode_flags)
 	priv->contexts[IWL_RXON_CTX_PAN].interface_modes =
 		BIT(NL80211_IFTYPE_STATION) | BIT(NL80211_IFTYPE_AP);
 
-	if (ucode_flags & IWL_UCODE_TLV_FLAGS_P2P)
-		priv->contexts[IWL_RXON_CTX_PAN].interface_modes |=
-			BIT(NL80211_IFTYPE_P2P_CLIENT) |
-			BIT(NL80211_IFTYPE_P2P_GO);
-
 	priv->contexts[IWL_RXON_CTX_PAN].ap_devtype = RXON_DEV_TYPE_CP;
 	priv->contexts[IWL_RXON_CTX_PAN].station_devtype = RXON_DEV_TYPE_2STA;
 	priv->contexts[IWL_RXON_CTX_PAN].unused_devtype = RXON_DEV_TYPE_P2P;
@@ -623,7 +620,7 @@ static void iwl_rf_kill_ct_config(struct iwl_priv *priv)
 
 		ret = iwl_dvm_send_cmd_pdu(priv,
 				       REPLY_CT_KILL_CONFIG_CMD,
-				       CMD_SYNC, sizeof(adv_cmd), &adv_cmd);
+				       0, sizeof(adv_cmd), &adv_cmd);
 		if (ret)
 			IWL_ERR(priv, "REPLY_CT_KILL_CONFIG_CMD failed\n");
 		else
@@ -638,7 +635,7 @@ static void iwl_rf_kill_ct_config(struct iwl_priv *priv)
 
 		ret = iwl_dvm_send_cmd_pdu(priv,
 				       REPLY_CT_KILL_CONFIG_CMD,
-				       CMD_SYNC, sizeof(cmd), &cmd);
+				       0, sizeof(cmd), &cmd);
 		if (ret)
 			IWL_ERR(priv, "REPLY_CT_KILL_CONFIG_CMD failed\n");
 		else
@@ -674,9 +671,7 @@ static int iwlagn_send_tx_ant_config(struct iwl_priv *priv, u8 valid_tx_ant)
 
 	if (IWL_UCODE_API(priv->fw->ucode_ver) > 1) {
 		IWL_DEBUG_HC(priv, "select valid tx ant: %u\n", valid_tx_ant);
-		return iwl_dvm_send_cmd_pdu(priv,
-					TX_ANT_CONFIGURATION_CMD,
-					CMD_SYNC,
+		return iwl_dvm_send_cmd_pdu(priv, TX_ANT_CONFIGURATION_CMD, 0,
 					sizeof(struct iwl_tx_ant_config_cmd),
 					&tx_ant_cmd);
 	} else {
@@ -704,7 +699,7 @@ static void iwl_send_bt_config(struct iwl_priv *priv)
 		(bt_cmd.flags == BT_COEX_DISABLE) ? "disable" : "active");
 
 	if (iwl_dvm_send_cmd_pdu(priv, REPLY_BT_CONFIG,
-			     CMD_SYNC, sizeof(struct iwl_bt_cmd), &bt_cmd))
+			     0, sizeof(struct iwl_bt_cmd), &bt_cmd))
 		IWL_ERR(priv, "failed to send BT Coex Config\n");
 }
 
@@ -758,7 +753,7 @@ int iwl_alive_start(struct iwl_priv *priv)
 					 BT_COEX_PRIO_TBL_EVT_INIT_CALIB2);
 		if (ret)
 			return ret;
-	} else {
+	} else if (priv->lib->bt_params) {
 		/*
 		 * default is 2-wire BT coexexistence support
 		 */
@@ -853,14 +848,6 @@ void iwl_down(struct iwl_priv *priv)
 	lockdep_assert_held(&priv->mutex);
 
 	iwl_scan_cancel_timeout(priv, 200);
-
-	/*
-	 * If active, scanning won't cancel it, so say it expired.
-	 * No race since we hold the mutex here and a new one
-	 * can't come in at this time.
-	 */
-	if (priv->ucode_loaded && priv->cur_ucode != IWL_UCODE_INIT)
-		ieee80211_remain_on_channel_expired(priv->hw);
 
 	exit_pending =
 		test_and_set_bit(STATUS_EXIT_PENDING, &priv->status);
@@ -996,45 +983,10 @@ static void iwl_bg_restart(struct work_struct *data)
 			ieee80211_restart_hw(priv->hw);
 		else
 			IWL_ERR(priv,
-				"Cannot request restart before registrating with mac80211");
+				"Cannot request restart before registrating with mac80211\n");
 	} else {
 		WARN_ON(1);
 	}
-}
-
-
-
-
-void iwlagn_disable_roc(struct iwl_priv *priv)
-{
-	struct iwl_rxon_context *ctx = &priv->contexts[IWL_RXON_CTX_PAN];
-
-	lockdep_assert_held(&priv->mutex);
-
-	if (!priv->hw_roc_setup)
-		return;
-
-	ctx->staging.dev_type = RXON_DEV_TYPE_P2P;
-	ctx->staging.filter_flags &= ~RXON_FILTER_ASSOC_MSK;
-
-	priv->hw_roc_channel = NULL;
-
-	memset(ctx->staging.node_addr, 0, ETH_ALEN);
-
-	iwlagn_commit_rxon(priv, ctx);
-
-	ctx->is_active = false;
-	priv->hw_roc_setup = false;
-}
-
-static void iwlagn_disable_roc_work(struct work_struct *work)
-{
-	struct iwl_priv *priv = container_of(work, struct iwl_priv,
-					     hw_roc_disable_work.work);
-
-	mutex_lock(&priv->mutex);
-	iwlagn_disable_roc(priv);
-	mutex_unlock(&priv->mutex);
 }
 
 /*****************************************************************************
@@ -1053,8 +1005,6 @@ static void iwl_setup_deferred_work(struct iwl_priv *priv)
 	INIT_WORK(&priv->tx_flush, iwl_bg_tx_flush);
 	INIT_WORK(&priv->bt_full_concurrency, iwl_bg_bt_full_concurrency);
 	INIT_WORK(&priv->bt_runtime_config, iwl_bg_bt_runtime_config);
-	INIT_DELAYED_WORK(&priv->hw_roc_disable_work,
-			  iwlagn_disable_roc_work);
 
 	iwl_setup_scan_deferred_work(priv);
 
@@ -1082,7 +1032,6 @@ void iwl_cancel_deferred_work(struct iwl_priv *priv)
 
 	cancel_work_sync(&priv->bt_full_concurrency);
 	cancel_work_sync(&priv->bt_runtime_config);
-	cancel_delayed_work_sync(&priv->hw_roc_disable_work);
 
 	del_timer_sync(&priv->statistics_periodic);
 	del_timer_sync(&priv->ucode_trace);
@@ -1169,18 +1118,11 @@ static void iwl_option_config(struct iwl_priv *priv)
 #else
 	IWL_INFO(priv, "CONFIG_IWLWIFI_DEVICE_TRACING disabled\n");
 #endif
-
-#ifdef CONFIG_IWLWIFI_P2P
-	IWL_INFO(priv, "CONFIG_IWLWIFI_P2P enabled\n");
-#else
-	IWL_INFO(priv, "CONFIG_IWLWIFI_P2P disabled\n");
-#endif
 }
 
 static int iwl_eeprom_init_hw_params(struct iwl_priv *priv)
 {
 	struct iwl_nvm_data *data = priv->nvm_data;
-	char *debug_msg;
 
 	if (data->sku_cap_11n_enable &&
 	    !priv->cfg->ht_params) {
@@ -1194,8 +1136,8 @@ static int iwl_eeprom_init_hw_params(struct iwl_priv *priv)
 		return -EINVAL;
 	}
 
-	debug_msg = "Device SKU: 24GHz %s %s, 52GHz %s %s, 11.n %s %s\n";
-	IWL_DEBUG_INFO(priv, debug_msg,
+	IWL_DEBUG_INFO(priv,
+		       "Device SKU: 24GHz %s %s, 52GHz %s %s, 11.n %s %s\n",
 		       data->sku_cap_band_24GHz_enable ? "" : "NOT", "enabled",
 		       data->sku_cap_band_52GHz_enable ? "" : "NOT", "enabled",
 		       data->sku_cap_11n_enable ? "" : "NOT", "enabled");
@@ -1315,10 +1257,6 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 
 	ucode_flags = fw->ucode_capa.flags;
 
-#ifndef CONFIG_IWLWIFI_P2P
-	ucode_flags &= ~IWL_UCODE_TLV_FLAGS_P2P;
-#endif
-
 	if (ucode_flags & IWL_UCODE_TLV_FLAGS_PAN) {
 		priv->sta_key_max_num = STA_KEY_MAX_NUM_PAN;
 		trans_cfg.cmd_queue = IWL_IPAN_CMD_QUEUE_NUM;
@@ -1374,7 +1312,7 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 	}
 
 	/* Reset chip to save power until we load uCode during "up". */
-	iwl_trans_stop_hw(priv->trans, false);
+	iwl_trans_stop_device(priv->trans);
 
 	priv->nvm_data = iwl_parse_eeprom_data(priv->trans->dev, priv->cfg,
 						  priv->eeprom_blob,
@@ -1407,13 +1345,12 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 	iwl_set_hw_params(priv);
 
 	if (!(priv->nvm_data->sku_cap_ipan_enable)) {
-		IWL_DEBUG_INFO(priv, "Your EEPROM disabled PAN");
+		IWL_DEBUG_INFO(priv, "Your EEPROM disabled PAN\n");
 		ucode_flags &= ~IWL_UCODE_TLV_FLAGS_PAN;
 		/*
 		 * if not PAN, then don't support P2P -- might be a uCode
 		 * packaging bug or due to the eeprom check above
 		 */
-		ucode_flags &= ~IWL_UCODE_TLV_FLAGS_P2P;
 		priv->sta_key_max_num = STA_KEY_MAX_NUM;
 		trans_cfg.cmd_queue = IWL_DEFAULT_CMD_QUEUE_NUM;
 
@@ -1520,7 +1457,7 @@ static void iwl_op_mode_dvm_stop(struct iwl_op_mode *op_mode)
 
 	dev_kfree_skb(priv->beacon_skb);
 
-	iwl_trans_stop_hw(priv->trans, true);
+	iwl_trans_op_mode_leave(priv->trans);
 	ieee80211_free_hw(priv->hw);
 }
 
@@ -2077,10 +2014,10 @@ void iwlagn_lift_passive_no_rx(struct iwl_priv *priv)
 
 	for (mq = 0; mq < IWLAGN_FIRST_AMPDU_QUEUE; mq++) {
 		if (!test_bit(mq, &priv->transport_queue_stop)) {
-			IWL_DEBUG_TX_QUEUES(priv, "Wake queue %d", mq);
+			IWL_DEBUG_TX_QUEUES(priv, "Wake queue %d\n", mq);
 			ieee80211_wake_queue(priv->hw, mq);
 		} else {
-			IWL_DEBUG_TX_QUEUES(priv, "Don't wake queue %d", mq);
+			IWL_DEBUG_TX_QUEUES(priv, "Don't wake queue %d\n", mq);
 		}
 	}
 
@@ -2097,7 +2034,7 @@ static void iwl_free_skb(struct iwl_op_mode *op_mode, struct sk_buff *skb)
 	ieee80211_free_txskb(priv->hw, skb);
 }
 
-static void iwl_set_hw_rfkill_state(struct iwl_op_mode *op_mode, bool state)
+static bool iwl_set_hw_rfkill_state(struct iwl_op_mode *op_mode, bool state)
 {
 	struct iwl_priv *priv = IWL_OP_MODE_GET_DVM(op_mode);
 
@@ -2107,6 +2044,19 @@ static void iwl_set_hw_rfkill_state(struct iwl_op_mode *op_mode, bool state)
 		clear_bit(STATUS_RF_KILL_HW, &priv->status);
 
 	wiphy_rfkill_set_hw_state(priv->hw->wiphy, state);
+
+	return false;
+}
+
+static void iwl_napi_add(struct iwl_op_mode *op_mode,
+			 struct napi_struct *napi,
+			 struct net_device *napi_dev,
+			 int (*poll)(struct napi_struct *, int),
+			 int weight)
+{
+	struct iwl_priv *priv = IWL_OP_MODE_GET_DVM(op_mode);
+
+	ieee80211_napi_add(priv->hw, napi, napi_dev, poll, weight);
 }
 
 static const struct iwl_op_mode_ops iwl_dvm_ops = {
@@ -2121,6 +2071,7 @@ static const struct iwl_op_mode_ops iwl_dvm_ops = {
 	.cmd_queue_full = iwl_cmd_queue_full,
 	.nic_config = iwl_nic_config,
 	.wimax_active = iwl_wimax_active,
+	.napi_add = iwl_napi_add,
 };
 
 /*****************************************************************************

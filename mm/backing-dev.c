@@ -180,7 +180,8 @@ static ssize_t name##_show(struct device *dev,				\
 	struct backing_dev_info *bdi = dev_get_drvdata(dev);		\
 									\
 	return snprintf(page, PAGE_SIZE-1, "%lld\n", (long long)expr);	\
-}
+}									\
+static DEVICE_ATTR_RW(name);
 
 BDI_SHOW(read_ahead_kb, K(bdi->ra_pages))
 
@@ -231,16 +232,16 @@ static ssize_t stable_pages_required_show(struct device *dev,
 	return snprintf(page, PAGE_SIZE-1, "%d\n",
 			bdi_cap_stable_pages_required(bdi) ? 1 : 0);
 }
+static DEVICE_ATTR_RO(stable_pages_required);
 
-#define __ATTR_RW(attr) __ATTR(attr, 0644, attr##_show, attr##_store)
-
-static struct device_attribute bdi_dev_attrs[] = {
-	__ATTR_RW(read_ahead_kb),
-	__ATTR_RW(min_ratio),
-	__ATTR_RW(max_ratio),
-	__ATTR_RO(stable_pages_required),
-	__ATTR_NULL,
+static struct attribute *bdi_dev_attrs[] = {
+	&dev_attr_read_ahead_kb.attr,
+	&dev_attr_min_ratio.attr,
+	&dev_attr_max_ratio.attr,
+	&dev_attr_stable_pages_required.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(bdi_dev);
 
 static __init int bdi_class_init(void)
 {
@@ -248,7 +249,7 @@ static __init int bdi_class_init(void)
 	if (IS_ERR(bdi_class))
 		return PTR_ERR(bdi_class);
 
-	bdi_class->dev_attrs = bdi_dev_attrs;
+	bdi_class->dev_groups = bdi_dev_groups;
 	bdi_debug_init();
 	return 0;
 }
@@ -287,13 +288,19 @@ int bdi_has_dirty_io(struct backing_dev_info *bdi)
  * Note, we wouldn't bother setting up the timer, but this function is on the
  * fast-path (used by '__mark_inode_dirty()'), so we save few context switches
  * by delaying the wake-up.
+ *
+ * We have to be careful not to postpone flush work if it is scheduled for
+ * earlier. Thus we use queue_delayed_work().
  */
 void bdi_wakeup_thread_delayed(struct backing_dev_info *bdi)
 {
 	unsigned long timeout;
 
 	timeout = msecs_to_jiffies(dirty_writeback_interval * 10);
-	mod_delayed_work(bdi_wq, &bdi->wb.dwork, timeout);
+	spin_lock_bh(&bdi->wb_lock);
+	if (test_bit(BDI_registered, &bdi->state))
+		queue_delayed_work(bdi_wq, &bdi->wb.dwork, timeout);
+	spin_unlock_bh(&bdi->wb_lock);
 }
 
 /*
@@ -306,9 +313,6 @@ static void bdi_remove_from_list(struct backing_dev_info *bdi)
 	spin_unlock_bh(&bdi_lock);
 
 	synchronize_rcu_expedited();
-
-	/* bdi_list is now unused, clear it to mark @bdi dying */
-	INIT_LIST_HEAD(&bdi->bdi_list);
 }
 
 int bdi_register(struct backing_dev_info *bdi, struct device *parent,
@@ -358,6 +362,11 @@ static void bdi_wb_shutdown(struct backing_dev_info *bdi)
 	 * Make sure nobody finds us on the bdi_list anymore
 	 */
 	bdi_remove_from_list(bdi);
+
+	/* Make sure nobody queues further work */
+	spin_lock_bh(&bdi->wb_lock);
+	clear_bit(BDI_registered, &bdi->state);
+	spin_unlock_bh(&bdi->wb_lock);
 
 	/*
 	 * Drain work list and shutdown the delayed_work.  At this point,
@@ -548,7 +557,7 @@ void clear_bdi_congested(struct backing_dev_info *bdi, int sync)
 	bit = sync ? BDI_sync_congested : BDI_async_congested;
 	if (test_and_clear_bit(bit, &bdi->state))
 		atomic_dec(&nr_bdi_congested[sync]);
-	smp_mb__after_clear_bit();
+	smp_mb__after_atomic();
 	if (waitqueue_active(wqh))
 		wake_up(wqh);
 }
@@ -651,7 +660,7 @@ int pdflush_proc_obsolete(struct ctl_table *table, int write,
 {
 	char kbuf[] = "0\n";
 
-	if (*ppos) {
+	if (*ppos || *lenp < sizeof(kbuf)) {
 		*lenp = 0;
 		return 0;
 	}

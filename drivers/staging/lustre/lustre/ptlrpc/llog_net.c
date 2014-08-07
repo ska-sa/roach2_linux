@@ -46,18 +46,17 @@
 
 #define DEBUG_SUBSYSTEM S_LOG
 
-#include <linux/libcfs/libcfs.h>
+#include "../../include/linux/libcfs/libcfs.h"
 
-#include <obd_class.h>
-#include <lustre_log.h>
+#include "../include/obd_class.h"
+#include "../include/lustre_log.h"
 #include <linux/list.h>
-#include <lvfs.h>
-#include <lustre_fsfilt.h>
+#include "../include/lvfs.h"
+#include "../include/lustre_fsfilt.h"
 
 int llog_initiator_connect(struct llog_ctxt *ctxt)
 {
 	struct obd_import *new_imp;
-	ENTRY;
 
 	LASSERT(ctxt);
 	new_imp = ctxt->loc_obd->u.cli.cl_import;
@@ -70,6 +69,6 @@ int llog_initiator_connect(struct llog_ctxt *ctxt)
 		ctxt->loc_imp = class_import_get(new_imp);
 	}
 	mutex_unlock(&ctxt->loc_mutex);
-	RETURN(0);
+	return 0;
 }
 EXPORT_SYMBOL(llog_initiator_connect);

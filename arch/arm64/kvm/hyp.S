@@ -214,6 +214,7 @@ __kvm_hyp_code_start:
 	mrs	x21,	tpidr_el1
 	mrs	x22, 	amair_el1
 	mrs	x23, 	cntkctl_el1
+	mrs	x24,	par_el1
 
 	stp	x4, x5, [x3]
 	stp	x6, x7, [x3, #16]
@@ -225,6 +226,7 @@ __kvm_hyp_code_start:
 	stp	x18, x19, [x3, #112]
 	stp	x20, x21, [x3, #128]
 	stp	x22, x23, [x3, #144]
+	str	x24, [x3, #160]
 .endm
 
 .macro restore_sysregs
@@ -243,6 +245,7 @@ __kvm_hyp_code_start:
 	ldp	x18, x19, [x3, #112]
 	ldp	x20, x21, [x3, #128]
 	ldp	x22, x23, [x3, #144]
+	ldr	x24, [x3, #160]
 
 	msr	vmpidr_el2,	x4
 	msr	csselr_el1,	x5
@@ -264,6 +267,7 @@ __kvm_hyp_code_start:
 	msr	tpidr_el1,	x21
 	msr	amair_el1,	x22
 	msr	cntkctl_el1,	x23
+	msr	par_el1,	x24
 .endm
 
 .macro skip_32bit_state tmp, target
@@ -399,6 +403,14 @@ __kvm_hyp_code_start:
 	ldr	w9, [x2, #GICH_ELRSR0]
 	ldr	w10, [x2, #GICH_ELRSR1]
 	ldr	w11, [x2, #GICH_APR]
+CPU_BE(	rev	w4,  w4  )
+CPU_BE(	rev	w5,  w5  )
+CPU_BE(	rev	w6,  w6  )
+CPU_BE(	rev	w7,  w7  )
+CPU_BE(	rev	w8,  w8  )
+CPU_BE(	rev	w9,  w9  )
+CPU_BE(	rev	w10, w10 )
+CPU_BE(	rev	w11, w11 )
 
 	str	w4, [x3, #VGIC_CPU_HCR]
 	str	w5, [x3, #VGIC_CPU_VMCR]
@@ -417,6 +429,7 @@ __kvm_hyp_code_start:
 	ldr	w4, [x3, #VGIC_CPU_NR_LR]
 	add	x3, x3, #VGIC_CPU_LR
 1:	ldr	w5, [x2], #4
+CPU_BE(	rev	w5, w5 )
 	str	w5, [x3], #4
 	sub	w4, w4, #1
 	cbnz	w4, 1b
@@ -442,6 +455,9 @@ __kvm_hyp_code_start:
 	ldr	w4, [x3, #VGIC_CPU_HCR]
 	ldr	w5, [x3, #VGIC_CPU_VMCR]
 	ldr	w6, [x3, #VGIC_CPU_APR]
+CPU_BE(	rev	w4, w4 )
+CPU_BE(	rev	w5, w5 )
+CPU_BE(	rev	w6, w6 )
 
 	str	w4, [x2, #GICH_HCR]
 	str	w5, [x2, #GICH_VMCR]
@@ -452,6 +468,7 @@ __kvm_hyp_code_start:
 	ldr	w4, [x3, #VGIC_CPU_NR_LR]
 	add	x3, x3, #VGIC_CPU_LR
 1:	ldr	w5, [x3], #4
+CPU_BE(	rev	w5, w5 )
 	str	w5, [x2], #4
 	sub	w4, w4, #1
 	cbnz	w4, 1b
@@ -600,6 +617,8 @@ END(__kvm_vcpu_run)
 
 // void __kvm_tlb_flush_vmid_ipa(struct kvm *kvm, phys_addr_t ipa);
 ENTRY(__kvm_tlb_flush_vmid_ipa)
+	dsb	ishst
+
 	kern_hyp_va	x0
 	ldr	x2, [x0, #KVM_VTTBR]
 	msr	vttbr_el2, x2
@@ -611,9 +630,15 @@ ENTRY(__kvm_tlb_flush_vmid_ipa)
 	 * whole of Stage-1. Weep...
 	 */
 	tlbi	ipas2e1is, x1
-	dsb	sy
+	/*
+	 * We have to ensure completion of the invalidation at Stage-2,
+	 * since a table walk on another CPU could refill a TLB with a
+	 * complete (S1 + S2) walk based on the old Stage-2 mapping if
+	 * the Stage-1 invalidation happened first.
+	 */
+	dsb	ish
 	tlbi	vmalle1is
-	dsb	sy
+	dsb	ish
 	isb
 
 	msr	vttbr_el2, xzr
@@ -621,9 +646,10 @@ ENTRY(__kvm_tlb_flush_vmid_ipa)
 ENDPROC(__kvm_tlb_flush_vmid_ipa)
 
 ENTRY(__kvm_flush_vm_context)
+	dsb	ishst
 	tlbi	alle1is
 	ic	ialluis
-	dsb	sy
+	dsb	ish
 	ret
 ENDPROC(__kvm_flush_vm_context)
 
@@ -674,6 +700,24 @@ __hyp_panic_str:
 
 	.align	2
 
+/*
+ * u64 kvm_call_hyp(void *hypfn, ...);
+ *
+ * This is not really a variadic function in the classic C-way and care must
+ * be taken when calling this to ensure parameters are passed in registers
+ * only, since the stack will change between the caller and the callee.
+ *
+ * Call the function with the first argument containing a pointer to the
+ * function you wish to call in Hyp mode, and subsequent arguments will be
+ * passed as x0, x1, and x2 (a maximum of 3 arguments in addition to the
+ * function pointer can be passed).  The function being called must be mapped
+ * in Hyp mode (see init_hyp_mode in arch/arm/kvm/arm.c).  Return values are
+ * passed in r0 and r1.
+ *
+ * A function pointer with a value of 0 has a special meaning, and is
+ * used to implement __hyp_get_vectors in the same way as in
+ * arch/arm64/kernel/hyp_stub.S.
+ */
 ENTRY(kvm_call_hyp)
 	hvc	#0
 	ret
@@ -717,7 +761,12 @@ el1_sync:					// Guest trapped into EL2
 	pop	x2, x3
 	pop	x0, x1
 
-	push	lr, xzr
+	/* Check for __hyp_get_vectors */
+	cbnz	x0, 1f
+	mrs	x0, vbar_el2
+	b	2f
+
+1:	push	lr, xzr
 
 	/*
 	 * Compute the function address in EL2, and shuffle the parameters.
@@ -730,7 +779,7 @@ el1_sync:					// Guest trapped into EL2
 	blr	lr
 
 	pop	lr, xzr
-	eret
+2:	eret
 
 el1_trap:
 	/*
@@ -753,6 +802,10 @@ el1_trap:
 	 */
 	tbnz	x1, #7, 1f	// S1PTW is set
 
+	/* Preserve PAR_EL1 */
+	mrs	x3, par_el1
+	push	x3, xzr
+
 	/*
 	 * Permission fault, HPFAR_EL2 is invalid.
 	 * Resolve the IPA the hard way using the guest VA.
@@ -766,6 +819,8 @@ el1_trap:
 
 	/* Read result */
 	mrs	x3, par_el1
+	pop	x0, xzr			// Restore PAR_EL1 from the stack
+	msr	par_el1, x0
 	tbnz	x3, #0, 3f		// Bail out if we failed the translation
 	ubfx	x3, x3, #12, #36	// Extract IPA
 	lsl	x3, x3, #4		// and present it like HPFAR

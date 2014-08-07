@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2014, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -125,15 +125,16 @@ acpi_status acpi_ev_gpe_initialize(void)
 		/* GPE block 0 exists (has both length and address > 0) */
 
 		register_count0 = (u16)(acpi_gbl_FADT.gpe0_block_length / 2);
-
 		gpe_number_max =
 		    (register_count0 * ACPI_GPE_REGISTER_WIDTH) - 1;
 
 		/* Install GPE Block 0 */
 
 		status = acpi_ev_create_gpe_block(acpi_gbl_fadt_gpe_device,
-						  &acpi_gbl_FADT.xgpe0_block,
-						  register_count0, 0,
+						  acpi_gbl_FADT.xgpe0_block.
+						  address,
+						  acpi_gbl_FADT.xgpe0_block.
+						  space_id, register_count0, 0,
 						  acpi_gbl_FADT.sci_interrupt,
 						  &acpi_gbl_gpe_fadt_blocks[0]);
 
@@ -170,8 +171,10 @@ acpi_status acpi_ev_gpe_initialize(void)
 
 			status =
 			    acpi_ev_create_gpe_block(acpi_gbl_fadt_gpe_device,
-						     &acpi_gbl_FADT.xgpe1_block,
-						     register_count1,
+						     acpi_gbl_FADT.xgpe1_block.
+						     address,
+						     acpi_gbl_FADT.xgpe1_block.
+						     space_id, register_count1,
 						     acpi_gbl_FADT.gpe1_base,
 						     acpi_gbl_FADT.
 						     sci_interrupt,
@@ -204,17 +207,7 @@ acpi_status acpi_ev_gpe_initialize(void)
 		goto cleanup;
 	}
 
-	/* Check for Max GPE number out-of-range */
-
-	if (gpe_number_max > ACPI_GPE_MAX) {
-		ACPI_ERROR((AE_INFO,
-			    "Maximum GPE number from FADT is too large: 0x%X",
-			    gpe_number_max));
-		status = AE_BAD_VALUE;
-		goto cleanup;
-	}
-
-      cleanup:
+cleanup:
 	(void)acpi_ut_release_mutex(ACPI_MTX_NAMESPACE);
 	return_ACPI_STATUS(AE_OK);
 }

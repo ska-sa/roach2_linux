@@ -9,11 +9,13 @@
 #include <asm/memory.h>
 #include <asm/page.h>
 
+#include "image.h"
+
 #define ARM_EXIT_KEEP(x)
 #define ARM_EXIT_DISCARD(x)	x
 
 OUTPUT_ARCH(aarch64)
-ENTRY(stext)
+ENTRY(_text)
 
 jiffies = jiffies_64;
 
@@ -54,7 +56,6 @@ SECTIONS
 	}
 	.text : {			/* Real text segment		*/
 		_stext = .;		/* Text and read-only data	*/
-			*(.smp.pen.text)
 			__exception_text_start = .;
 			*(.exception.text)
 			__exception_text_end = .;
@@ -71,6 +72,7 @@ SECTIONS
 
 	RO_DATA(PAGE_SIZE)
 	EXCEPTION_TABLE(8)
+	NOTES
 	_etext = .;			/* End of text and rodata section */
 
 	. = ALIGN(PAGE_SIZE);
@@ -96,39 +98,26 @@ SECTIONS
 	PERCPU_SECTION(64)
 
 	__init_end = .;
-	. = ALIGN(THREAD_SIZE);
-	__data_loc = .;
 
-	.data : AT(__data_loc) {
-		_data = .;		/* address in memory */
-		_sdata = .;
-
-		/*
-		 * first, the init task union, aligned
-		 * to an 8192 byte boundary.
-		 */
-		INIT_TASK_DATA(THREAD_SIZE)
-		NOSAVE_DATA
-		CACHELINE_ALIGNED_DATA(64)
-		READ_MOSTLY_DATA(64)
-
-		/*
-		 * and the usual data section
-		 */
-		DATA_DATA
-		CONSTRUCTORS
-
-		_edata = .;
-	}
-	_edata_loc = __data_loc + SIZEOF(.data);
-
-	NOTES
+	. = ALIGN(PAGE_SIZE);
+	_data = .;
+	_sdata = .;
+	RW_DATA_SECTION(64, PAGE_SIZE, THREAD_SIZE)
+	_edata = .;
 
 	BSS_SECTION(0, 0, 0)
+
+	. = ALIGN(PAGE_SIZE);
+	idmap_pg_dir = .;
+	. += IDMAP_DIR_SIZE;
+	swapper_pg_dir = .;
+	. += SWAPPER_DIR_SIZE;
+
 	_end = .;
 
 	STABS_DEBUG
-	.comment 0 : { *(.comment) }
+
+	HEAD_SYMBOLS
 }
 
 /*
@@ -136,3 +125,8 @@ SECTIONS
  */
 ASSERT(((__hyp_idmap_text_start + PAGE_SIZE) > __hyp_idmap_text_end),
        "HYP init code too big")
+
+/*
+ * If padding is applied before .head.text, virt<->phys conversions will fail.
+ */
+ASSERT(_text == (PAGE_OFFSET + TEXT_OFFSET), "HEAD is misaligned")

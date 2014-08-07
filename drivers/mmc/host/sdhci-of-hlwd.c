@@ -58,6 +58,10 @@ static const struct sdhci_ops sdhci_hlwd_ops = {
 	.write_l = sdhci_hlwd_writel,
 	.write_w = sdhci_hlwd_writew,
 	.write_b = sdhci_hlwd_writeb,
+	.set_clock = sdhci_set_clock,
+	.set_bus_width = sdhci_set_bus_width,
+	.reset = sdhci_reset,
+	.set_uhs_signaling = sdhci_set_uhs_signaling,
 };
 
 static const struct sdhci_pltfm_data sdhci_hlwd_pdata = {
@@ -68,7 +72,7 @@ static const struct sdhci_pltfm_data sdhci_hlwd_pdata = {
 
 static int sdhci_hlwd_probe(struct platform_device *pdev)
 {
-	return sdhci_pltfm_register(pdev, &sdhci_hlwd_pdata);
+	return sdhci_pltfm_register(pdev, &sdhci_hlwd_pdata, 0);
 }
 
 static int sdhci_hlwd_remove(struct platform_device *pdev)

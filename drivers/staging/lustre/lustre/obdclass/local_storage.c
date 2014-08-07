@@ -45,17 +45,15 @@ static int ls_object_init(const struct lu_env *env, struct lu_object *o,
 	struct lu_object	*below;
 	struct lu_device	*under;
 
-	ENTRY;
-
 	ls = container_of0(o->lo_dev, struct ls_device, ls_top_dev.dd_lu_dev);
 	under = &ls->ls_osd->dd_lu_dev;
 	below = under->ld_ops->ldo_object_alloc(env, o->lo_header, under);
 	if (below == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 
 	lu_object_add(o, below);
 
-	RETURN(0);
+	return 0;
 }
 
 static void ls_object_free(const struct lu_env *env, struct lu_object *o)
@@ -143,8 +141,6 @@ struct ls_device *ls_device_get(struct dt_device *dev)
 {
 	struct ls_device *ls;
 
-	ENTRY;
-
 	mutex_lock(&ls_list_mutex);
 	ls = __ls_find_dev(dev);
 	if (ls)
@@ -170,7 +166,7 @@ struct ls_device *ls_device_get(struct dt_device *dev)
 	list_add(&ls->ls_linkage, &ls_list_head);
 out_ls:
 	mutex_unlock(&ls_list_mutex);
-	RETURN(ls);
+	return ls;
 }
 
 void ls_device_put(const struct lu_env *env, struct ls_device *ls)
@@ -224,26 +220,24 @@ int local_object_declare_create(const struct lu_env *env,
 	struct dt_thread_info	*dti = dt_info(env);
 	int			 rc;
 
-	ENTRY;
-
 	/* update fid generation file */
 	if (los != NULL) {
 		LASSERT(dt_object_exists(los->los_obj));
 		rc = dt_declare_record_write(env, los->los_obj,
 					     sizeof(struct los_ondisk), 0, th);
 		if (rc)
-			RETURN(rc);
+			return rc;
 	}
 
 	rc = dt_declare_create(env, o, attr, NULL, dof, th);
 	if (rc)
-		RETURN(rc);
+		return rc;
 
 	dti->dti_lb.lb_buf = NULL;
 	dti->dti_lb.lb_len = sizeof(dti->dti_lma);
 	rc = dt_declare_xattr_set(env, o, &dti->dti_lb, XATTR_NAME_LMA, 0, th);
 
-	RETURN(rc);
+	return rc;
 }
 
 int local_object_create(const struct lu_env *env,
@@ -252,17 +246,15 @@ int local_object_create(const struct lu_env *env,
 			struct dt_object_format *dof, struct thandle *th)
 {
 	struct dt_thread_info	*dti = dt_info(env);
-	obd_id			 lastid;
+	__le64			 lastid;
 	int			 rc;
-
-	ENTRY;
 
 	rc = dt_create(env, o, attr, NULL, dof, th);
 	if (rc)
-		RETURN(rc);
+		return rc;
 
 	if (los == NULL)
-		RETURN(rc);
+		return rc;
 
 	LASSERT(los->los_obj);
 	LASSERT(dt_object_exists(los->los_obj));
@@ -283,7 +275,7 @@ int local_object_create(const struct lu_env *env,
 			     th);
 	mutex_unlock(&los->los_id_lock);
 
-	RETURN(rc);
+	return rc;
 }
 
 /*
@@ -304,7 +296,7 @@ struct dt_object *__local_file_create(const struct lu_env *env,
 
 	dto = ls_locate(env, ls, fid);
 	if (unlikely(IS_ERR(dto)))
-		RETURN(dto);
+		return dto;
 
 	LASSERT(dto != NULL);
 	if (dt_object_exists(dto))
@@ -377,7 +369,7 @@ out:
 		lu_object_put_nocache(env, &dto->do_lu);
 		dto = ERR_PTR(rc);
 	}
-	RETURN(dto);
+	return dto;
 }
 
 /*
@@ -443,7 +435,7 @@ struct dt_object *local_file_find_or_create_with_fid(const struct lu_env *env,
 
 		ls = ls_device_get(dt);
 		if (IS_ERR(ls)) {
-			dto = ERR_PTR(PTR_ERR(ls));
+			dto = ERR_CAST(ls);
 		} else {
 			/* create the object */
 			dti->dti_attr.la_valid	= LA_MODE;
@@ -537,7 +529,7 @@ local_index_find_or_create_with_fid(const struct lu_env *env,
 
 		ls = ls_device_get(dt);
 		if (IS_ERR(ls)) {
-			dto = ERR_PTR(PTR_ERR(ls));
+			dto = ERR_CAST(ls);
 		} else {
 			/* create the object */
 			dti->dti_attr.la_valid		= LA_MODE;
@@ -588,17 +580,15 @@ int local_object_unlink(const struct lu_env *env, struct dt_device *dt,
 	struct thandle		*th;
 	int			 rc;
 
-	ENTRY;
-
 	rc = dt_lookup_dir(env, parent, name, &dti->dti_fid);
 	if (rc == -ENOENT)
-		RETURN(0);
+		return 0;
 	else if (rc < 0)
-		RETURN(rc);
+		return rc;
 
 	dto = dt_locate(env, dt, &dti->dti_fid);
 	if (unlikely(IS_ERR(dto)))
-		RETURN(PTR_ERR(dto));
+		return PTR_ERR(dto);
 
 	th = dt_trans_create(env, dt);
 	if (IS_ERR(th))
@@ -680,7 +670,7 @@ int lastid_compat_check(const struct lu_env *env, struct dt_device *dev,
 		return PTR_ERR(root);
 
 	/* find old last_id file */
-	snprintf(dti->dti_buf, sizeof(dti->dti_buf), "seq-"LPX64"-lastid",
+	snprintf(dti->dti_buf, sizeof(dti->dti_buf), "seq-%#llx-lastid",
 		 lastid_seq);
 	rc = dt_lookup_dir(env, root, dti->dti_buf, &dti->dti_fid);
 	lu_object_put_nocache(env, &root->do_lu);
@@ -703,7 +693,7 @@ int lastid_compat_check(const struct lu_env *env, struct dt_device *dev,
 	} else if (rc < 0) {
 		return rc;
 	} else {
-		CDEBUG(D_INFO, "Found old lastid file for sequence "LPX64"\n",
+		CDEBUG(D_INFO, "Found old lastid file for sequence %#llx\n",
 		       lastid_seq);
 		o = ls_locate(env, ls, &dti->dti_fid);
 		if (IS_ERR(o))
@@ -719,12 +709,12 @@ int lastid_compat_check(const struct lu_env *env, struct dt_device *dev,
 	dt_read_unlock(env, o);
 	lu_object_put_nocache(env, &o->do_lu);
 	if (rc == 0 && le32_to_cpu(losd.lso_magic) != LOS_MAGIC) {
-		CERROR("%s: wrong content of seq-"LPX64"-lastid file, magic %x\n",
+		CERROR("%s: wrong content of seq-%#llx-lastid file, magic %x\n",
 		       o->do_lu.lo_dev->ld_obd->obd_name, lastid_seq,
 		       le32_to_cpu(losd.lso_magic));
 		return -EINVAL;
 	} else if (rc < 0) {
-		CERROR("%s: failed to read seq-"LPX64"-lastid: rc = %d\n",
+		CERROR("%s: failed to read seq-%#llx-lastid: rc = %d\n",
 		       o->do_lu.lo_dev->ld_obd->obd_name, lastid_seq, rc);
 		return rc;
 	}
@@ -747,7 +737,7 @@ int lastid_compat_check(const struct lu_env *env, struct dt_device *dev,
  * All dynamic fids will be generated with the same sequence and incremented
  * OIDs
  *
- * Returned local_oid_storage is in-memory representaion of OID storage
+ * Returned local_oid_storage is in-memory representation of OID storage
  */
 int local_oid_storage_init(const struct lu_env *env, struct dt_device *dev,
 			   const struct lu_fid *first_fid,
@@ -761,11 +751,9 @@ int local_oid_storage_init(const struct lu_env *env, struct dt_device *dev,
 	__u32			 first_oid = fid_oid(first_fid);
 	int			 rc = 0;
 
-	ENTRY;
-
 	ls = ls_device_get(dev);
 	if (IS_ERR(ls))
-		RETURN(PTR_ERR(ls));
+		return PTR_ERR(ls);
 
 	mutex_lock(&ls->ls_los_mutex);
 	*los = dt_los_find(ls, fid_seq(first_fid));
@@ -849,7 +837,7 @@ out_trans:
 		rc = dt_record_read(env, o, &dti->dti_lb, &dti->dti_off);
 		dt_read_unlock(env, o);
 		if (rc == 0 && le64_to_cpu(lastid) > OBIF_MAX_OID) {
-			CERROR("%s: bad oid "LPU64" is read from LAST_ID\n",
+			CERROR("%s: bad oid %llu is read from LAST_ID\n",
 			       o->do_lu.lo_dev->ld_obd->obd_name,
 			       le64_to_cpu(lastid));
 			rc = -EINVAL;
@@ -867,9 +855,12 @@ out_los:
 		(*los)->los_seq = fid_seq(first_fid);
 		(*los)->los_last_oid = le64_to_cpu(lastid);
 		(*los)->los_obj = o;
-		/* read value should not be less than initial one */
-		LASSERTF((*los)->los_last_oid >= first_oid, "%u < %u\n",
-			 (*los)->los_last_oid, first_oid);
+		/* Read value should not be less than initial one
+		 * but possible after upgrade from older fs.
+		 * In this case just switch to the first_oid in memory and
+		 * it will be updated on disk with first object generated */
+		if ((*los)->los_last_oid < first_oid)
+			(*los)->los_last_oid = first_oid;
 	}
 out:
 	mutex_unlock(&ls->ls_los_mutex);

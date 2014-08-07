@@ -178,7 +178,7 @@ static int wm8960_set_deemph(struct snd_soc_codec *codec)
 static int wm8960_get_deemph(struct snd_kcontrol *kcontrol,
 			     struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wm8960_priv *wm8960 = snd_soc_codec_get_drvdata(codec);
 
 	ucontrol->value.enumerated.item[0] = wm8960->deemph;
@@ -188,7 +188,7 @@ static int wm8960_get_deemph(struct snd_kcontrol *kcontrol,
 static int wm8960_put_deemph(struct snd_kcontrol *kcontrol,
 			     struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 	struct wm8960_priv *wm8960 = snd_soc_codec_get_drvdata(codec);
 	int deemph = ucontrol->value.enumerated.item[0];
 
@@ -263,8 +263,8 @@ SOC_SINGLE("ALC Attack", WM8960_ALC3, 0, 15, 0),
 SOC_SINGLE("Noise Gate Threshold", WM8960_NOISEG, 3, 31, 0),
 SOC_SINGLE("Noise Gate Switch", WM8960_NOISEG, 0, 1, 0),
 
-SOC_DOUBLE_R("ADC PCM Capture Volume", WM8960_LINPATH, WM8960_RINPATH,
-	0, 127, 0),
+SOC_DOUBLE_R_TLV("ADC PCM Capture Volume", WM8960_LADC, WM8960_RADC,
+	0, 255, 0, adc_tlv),
 
 SOC_SINGLE_TLV("Left Output Mixer Boost Bypass Volume",
 	       WM8960_BYPASS1, 4, 7, 1, bypass_tlv),
@@ -857,9 +857,9 @@ static int wm8960_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
 	if (pll_div.k) {
 		reg |= 0x20;
 
-		snd_soc_write(codec, WM8960_PLL2, (pll_div.k >> 18) & 0x3f);
-		snd_soc_write(codec, WM8960_PLL3, (pll_div.k >> 9) & 0x1ff);
-		snd_soc_write(codec, WM8960_PLL4, pll_div.k & 0x1ff);
+		snd_soc_write(codec, WM8960_PLL2, (pll_div.k >> 16) & 0xff);
+		snd_soc_write(codec, WM8960_PLL3, (pll_div.k >> 8) & 0xff);
+		snd_soc_write(codec, WM8960_PLL4, pll_div.k & 0xff);
 	}
 	snd_soc_write(codec, WM8960_PLL1, reg);
 
@@ -974,12 +974,6 @@ static int wm8960_probe(struct snd_soc_codec *codec)
 	} else {
 		if (pdata->capless)
 			wm8960->set_bias_level = wm8960_set_bias_level_capless;
-	}
-
-	ret = snd_soc_codec_set_cache_io(codec, 7, 9, SND_SOC_REGMAP);
-	if (ret < 0) {
-		dev_err(codec->dev, "Failed to set cache I/O: %d\n", ret);
-		return ret;
 	}
 
 	ret = wm8960_reset(codec);

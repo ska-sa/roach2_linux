@@ -543,8 +543,12 @@ struct dma_pl330_chan {
 	/* DMA-Engine Channel */
 	struct dma_chan chan;
 
-	/* List of to be xfered descriptors */
+	/* List of submitted descriptors */
+	struct list_head submitted_list;
+	/* List of issued descriptors */
 	struct list_head work_list;
+	/* List of completed descriptors */
+	struct list_head completed_list;
 
 	/* Pointer to the DMAC that manages this channel,
 	 * NULL if the channel is available to be acquired.
@@ -576,12 +580,16 @@ struct dma_pl330_dmac {
 	/* DMA-Engine Device */
 	struct dma_device ddma;
 
+	/* Holds info about sg limitations */
+	struct device_dma_parameters dma_parms;
+
 	/* Pool of descriptors available for the DMAC's channels */
 	struct list_head desc_pool;
 	/* To protect desc_pool manipulation */
 	spinlock_t pool_lock;
 
 	/* Peripheral channels connected to this DMAC */
+	unsigned int num_peripherals;
 	struct dma_pl330_chan *peripherals; /* keep at end */
 };
 
@@ -602,11 +610,6 @@ struct dma_pl330_desc {
 
 	/* The channel which currently holds this desc */
 	struct dma_pl330_chan *pchan;
-};
-
-struct dma_pl330_filter_args {
-	struct dma_pl330_dmac *pdmac;
-	unsigned int chan_id;
 };
 
 static inline void _callback(struct pl330_req *r, enum pl330_op_err err)
@@ -2198,66 +2201,6 @@ to_desc(struct dma_async_tx_descriptor *tx)
 	return container_of(tx, struct dma_pl330_desc, txd);
 }
 
-static inline void free_desc_list(struct list_head *list)
-{
-	struct dma_pl330_dmac *pdmac;
-	struct dma_pl330_desc *desc;
-	struct dma_pl330_chan *pch = NULL;
-	unsigned long flags;
-
-	/* Finish off the work list */
-	list_for_each_entry(desc, list, node) {
-		dma_async_tx_callback callback;
-		void *param;
-
-		/* All desc in a list belong to same channel */
-		pch = desc->pchan;
-		callback = desc->txd.callback;
-		param = desc->txd.callback_param;
-
-		if (callback)
-			callback(param);
-
-		desc->pchan = NULL;
-	}
-
-	/* pch will be unset if list was empty */
-	if (!pch)
-		return;
-
-	pdmac = pch->dmac;
-
-	spin_lock_irqsave(&pdmac->pool_lock, flags);
-	list_splice_tail_init(list, &pdmac->desc_pool);
-	spin_unlock_irqrestore(&pdmac->pool_lock, flags);
-}
-
-static inline void handle_cyclic_desc_list(struct list_head *list)
-{
-	struct dma_pl330_desc *desc;
-	struct dma_pl330_chan *pch = NULL;
-	unsigned long flags;
-
-	list_for_each_entry(desc, list, node) {
-		dma_async_tx_callback callback;
-
-		/* Change status to reload it */
-		desc->status = PREP;
-		pch = desc->pchan;
-		callback = desc->txd.callback;
-		if (callback)
-			callback(desc->txd.callback_param);
-	}
-
-	/* pch will be unset if list was empty */
-	if (!pch)
-		return;
-
-	spin_lock_irqsave(&pch->lock, flags);
-	list_splice_tail_init(list, &pch->work_list);
-	spin_unlock_irqrestore(&pch->lock, flags);
-}
-
 static inline void fill_queue(struct dma_pl330_chan *pch)
 {
 	struct dma_pl330_desc *desc;
@@ -2291,7 +2234,6 @@ static void pl330_tasklet(unsigned long data)
 	struct dma_pl330_chan *pch = (struct dma_pl330_chan *)data;
 	struct dma_pl330_desc *desc, *_dt;
 	unsigned long flags;
-	LIST_HEAD(list);
 
 	spin_lock_irqsave(&pch->lock, flags);
 
@@ -2300,7 +2242,7 @@ static void pl330_tasklet(unsigned long data)
 		if (desc->status == DONE) {
 			if (!pch->cyclic)
 				dma_cookie_complete(&desc->txd);
-			list_move_tail(&desc->node, &list);
+			list_move_tail(&desc->node, &pch->completed_list);
 		}
 
 	/* Try to submit a req imm. next to the last completed cookie */
@@ -2309,12 +2251,33 @@ static void pl330_tasklet(unsigned long data)
 	/* Make sure the PL330 Channel thread is active */
 	pl330_chan_ctrl(pch->pl330_chid, PL330_OP_START);
 
-	spin_unlock_irqrestore(&pch->lock, flags);
+	while (!list_empty(&pch->completed_list)) {
+		dma_async_tx_callback callback;
+		void *callback_param;
 
-	if (pch->cyclic)
-		handle_cyclic_desc_list(&list);
-	else
-		free_desc_list(&list);
+		desc = list_first_entry(&pch->completed_list,
+					struct dma_pl330_desc, node);
+
+		callback = desc->txd.callback;
+		callback_param = desc->txd.callback_param;
+
+		if (pch->cyclic) {
+			desc->status = PREP;
+			list_move_tail(&desc->node, &pch->work_list);
+		} else {
+			desc->status = FREE;
+			list_move_tail(&desc->node, &pch->dmac->desc_pool);
+		}
+
+		dma_descriptor_unmap(&desc->txd);
+
+		if (callback) {
+			spin_unlock_irqrestore(&pch->lock, flags);
+			callback(callback_param);
+			spin_lock_irqsave(&pch->lock, flags);
+		}
+	}
+	spin_unlock_irqrestore(&pch->lock, flags);
 }
 
 static void dma_pl330_rqcb(void *token, enum pl330_op_err err)
@@ -2336,16 +2299,6 @@ static void dma_pl330_rqcb(void *token, enum pl330_op_err err)
 	tasklet_schedule(&pch->task);
 }
 
-static bool pl330_dt_filter(struct dma_chan *chan, void *param)
-{
-	struct dma_pl330_filter_args *fargs = param;
-
-	if (chan->device != &fargs->pdmac->ddma)
-		return false;
-
-	return (chan->chan_id == fargs->chan_id);
-}
-
 bool pl330_filter(struct dma_chan *chan, void *param)
 {
 	u8 *peri_id;
@@ -2354,7 +2307,7 @@ bool pl330_filter(struct dma_chan *chan, void *param)
 		return false;
 
 	peri_id = chan->private;
-	return *peri_id == (unsigned)param;
+	return *peri_id == (unsigned long)param;
 }
 EXPORT_SYMBOL(pl330_filter);
 
@@ -2363,23 +2316,16 @@ static struct dma_chan *of_dma_pl330_xlate(struct of_phandle_args *dma_spec,
 {
 	int count = dma_spec->args_count;
 	struct dma_pl330_dmac *pdmac = ofdma->of_dma_data;
-	struct dma_pl330_filter_args fargs;
-	dma_cap_mask_t cap;
-
-	if (!pdmac)
-		return NULL;
+	unsigned int chan_id;
 
 	if (count != 1)
 		return NULL;
 
-	fargs.pdmac = pdmac;
-	fargs.chan_id = dma_spec->args[0];
+	chan_id = dma_spec->args[0];
+	if (chan_id >= pdmac->num_peripherals)
+		return NULL;
 
-	dma_cap_zero(cap);
-	dma_cap_set(DMA_SLAVE, cap);
-	dma_cap_set(DMA_CYCLIC, cap);
-
-	return dma_request_channel(cap, pl330_dt_filter, &fargs);
+	return dma_get_slave_channel(&pdmac->peripherals[chan_id].chan);
 }
 
 static int pl330_alloc_chan_resources(struct dma_chan *chan)
@@ -2409,7 +2355,7 @@ static int pl330_alloc_chan_resources(struct dma_chan *chan)
 static int pl330_control(struct dma_chan *chan, enum dma_ctrl_cmd cmd, unsigned long arg)
 {
 	struct dma_pl330_chan *pch = to_pchan(chan);
-	struct dma_pl330_desc *desc, *_dt;
+	struct dma_pl330_desc *desc;
 	unsigned long flags;
 	struct dma_pl330_dmac *pdmac = pch->dmac;
 	struct dma_slave_config *slave_config;
@@ -2423,12 +2369,24 @@ static int pl330_control(struct dma_chan *chan, enum dma_ctrl_cmd cmd, unsigned 
 		pl330_chan_ctrl(pch->pl330_chid, PL330_OP_FLUSH);
 
 		/* Mark all desc done */
-		list_for_each_entry_safe(desc, _dt, &pch->work_list , node) {
-			desc->status = DONE;
-			list_move_tail(&desc->node, &list);
+		list_for_each_entry(desc, &pch->submitted_list, node) {
+			desc->status = FREE;
+			dma_cookie_complete(&desc->txd);
 		}
 
-		list_splice_tail_init(&list, &pdmac->desc_pool);
+		list_for_each_entry(desc, &pch->work_list , node) {
+			desc->status = FREE;
+			dma_cookie_complete(&desc->txd);
+		}
+
+		list_for_each_entry(desc, &pch->completed_list , node) {
+			desc->status = FREE;
+			dma_cookie_complete(&desc->txd);
+		}
+
+		list_splice_tail_init(&pch->submitted_list, &pdmac->desc_pool);
+		list_splice_tail_init(&pch->work_list, &pdmac->desc_pool);
+		list_splice_tail_init(&pch->completed_list, &pdmac->desc_pool);
 		spin_unlock_irqrestore(&pch->lock, flags);
 		break;
 	case DMA_SLAVE_CONFIG:
@@ -2485,7 +2443,14 @@ pl330_tx_status(struct dma_chan *chan, dma_cookie_t cookie,
 
 static void pl330_issue_pending(struct dma_chan *chan)
 {
-	pl330_tasklet((unsigned long) to_pchan(chan));
+	struct dma_pl330_chan *pch = to_pchan(chan);
+	unsigned long flags;
+
+	spin_lock_irqsave(&pch->lock, flags);
+	list_splice_tail_init(&pch->submitted_list, &pch->work_list);
+	spin_unlock_irqrestore(&pch->lock, flags);
+
+	pl330_tasklet((unsigned long)pch);
 }
 
 /*
@@ -2505,14 +2470,18 @@ static dma_cookie_t pl330_tx_submit(struct dma_async_tx_descriptor *tx)
 	/* Assign cookies to all nodes */
 	while (!list_empty(&last->node)) {
 		desc = list_entry(last->node.next, struct dma_pl330_desc, node);
+		if (pch->cyclic) {
+			desc->txd.callback = last->txd.callback;
+			desc->txd.callback_param = last->txd.callback_param;
+		}
 
 		dma_cookie_assign(&desc->txd);
 
-		list_move_tail(&desc->node, &pch->work_list);
+		list_move_tail(&desc->node, &pch->submitted_list);
 	}
 
 	cookie = dma_cookie_assign(&last->txd);
-	list_add_tail(&last->node, &pch->work_list);
+	list_add_tail(&last->node, &pch->submitted_list);
 	spin_unlock_irqrestore(&pch->lock, flags);
 
 	return cookie;
@@ -2520,12 +2489,9 @@ static dma_cookie_t pl330_tx_submit(struct dma_async_tx_descriptor *tx)
 
 static inline void _init_desc(struct dma_pl330_desc *desc)
 {
-	desc->pchan = NULL;
 	desc->req.x = &desc->px;
 	desc->req.token = desc;
 	desc->rqcfg.swap = SWAP_NO;
-	desc->rqcfg.privileged = 0;
-	desc->rqcfg.insnaccess = 0;
 	desc->rqcfg.scctl = SCCTRL0;
 	desc->rqcfg.dcctl = DCCTRL0;
 	desc->req.cfg = &desc->rqcfg;
@@ -2545,7 +2511,7 @@ static int add_desc(struct dma_pl330_dmac *pdmac, gfp_t flg, int count)
 	if (!pdmac)
 		return 0;
 
-	desc = kmalloc(count * sizeof(*desc), flg);
+	desc = kcalloc(count, sizeof(*desc), flg);
 	if (!desc)
 		return 0;
 
@@ -2688,45 +2654,82 @@ static struct dma_async_tx_descriptor *pl330_prep_dma_cyclic(
 		size_t period_len, enum dma_transfer_direction direction,
 		unsigned long flags, void *context)
 {
-	struct dma_pl330_desc *desc;
+	struct dma_pl330_desc *desc = NULL, *first = NULL;
 	struct dma_pl330_chan *pch = to_pchan(chan);
+	struct dma_pl330_dmac *pdmac = pch->dmac;
+	unsigned int i;
 	dma_addr_t dst;
 	dma_addr_t src;
 
-	desc = pl330_get_desc(pch);
-	if (!desc) {
-		dev_err(pch->dmac->pif.dev, "%s:%d Unable to fetch desc\n",
-			__func__, __LINE__);
+	if (len % period_len != 0)
 		return NULL;
-	}
 
-	switch (direction) {
-	case DMA_MEM_TO_DEV:
-		desc->rqcfg.src_inc = 1;
-		desc->rqcfg.dst_inc = 0;
-		desc->req.rqtype = MEMTODEV;
-		src = dma_addr;
-		dst = pch->fifo_addr;
-		break;
-	case DMA_DEV_TO_MEM:
-		desc->rqcfg.src_inc = 0;
-		desc->rqcfg.dst_inc = 1;
-		desc->req.rqtype = DEVTOMEM;
-		src = pch->fifo_addr;
-		dst = dma_addr;
-		break;
-	default:
+	if (!is_slave_direction(direction)) {
 		dev_err(pch->dmac->pif.dev, "%s:%d Invalid dma direction\n",
 		__func__, __LINE__);
 		return NULL;
 	}
 
-	desc->rqcfg.brst_size = pch->burst_sz;
-	desc->rqcfg.brst_len = 1;
+	for (i = 0; i < len / period_len; i++) {
+		desc = pl330_get_desc(pch);
+		if (!desc) {
+			dev_err(pch->dmac->pif.dev, "%s:%d Unable to fetch desc\n",
+				__func__, __LINE__);
+
+			if (!first)
+				return NULL;
+
+			spin_lock_irqsave(&pdmac->pool_lock, flags);
+
+			while (!list_empty(&first->node)) {
+				desc = list_entry(first->node.next,
+						struct dma_pl330_desc, node);
+				list_move_tail(&desc->node, &pdmac->desc_pool);
+			}
+
+			list_move_tail(&first->node, &pdmac->desc_pool);
+
+			spin_unlock_irqrestore(&pdmac->pool_lock, flags);
+
+			return NULL;
+		}
+
+		switch (direction) {
+		case DMA_MEM_TO_DEV:
+			desc->rqcfg.src_inc = 1;
+			desc->rqcfg.dst_inc = 0;
+			desc->req.rqtype = MEMTODEV;
+			src = dma_addr;
+			dst = pch->fifo_addr;
+			break;
+		case DMA_DEV_TO_MEM:
+			desc->rqcfg.src_inc = 0;
+			desc->rqcfg.dst_inc = 1;
+			desc->req.rqtype = DEVTOMEM;
+			src = pch->fifo_addr;
+			dst = dma_addr;
+			break;
+		default:
+			break;
+		}
+
+		desc->rqcfg.brst_size = pch->burst_sz;
+		desc->rqcfg.brst_len = 1;
+		fill_px(&desc->px, dst, src, period_len);
+
+		if (!first)
+			first = desc;
+		else
+			list_add_tail(&desc->node, &first->node);
+
+		dma_addr += period_len;
+	}
+
+	if (!desc)
+		return NULL;
 
 	pch->cyclic = true;
-
-	fill_px(&desc->px, dst, src, period_len);
+	desc->txd.flags = flags;
 
 	return &desc->txd;
 }
@@ -2773,6 +2776,28 @@ pl330_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dst,
 	return &desc->txd;
 }
 
+static void __pl330_giveback_desc(struct dma_pl330_dmac *pdmac,
+				  struct dma_pl330_desc *first)
+{
+	unsigned long flags;
+	struct dma_pl330_desc *desc;
+
+	if (!first)
+		return;
+
+	spin_lock_irqsave(&pdmac->pool_lock, flags);
+
+	while (!list_empty(&first->node)) {
+		desc = list_entry(first->node.next,
+				struct dma_pl330_desc, node);
+		list_move_tail(&desc->node, &pdmac->desc_pool);
+	}
+
+	list_move_tail(&first->node, &pdmac->desc_pool);
+
+	spin_unlock_irqrestore(&pdmac->pool_lock, flags);
+}
+
 static struct dma_async_tx_descriptor *
 pl330_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 		unsigned int sg_len, enum dma_transfer_direction direction,
@@ -2781,7 +2806,6 @@ pl330_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 	struct dma_pl330_desc *first, *desc = NULL;
 	struct dma_pl330_chan *pch = to_pchan(chan);
 	struct scatterlist *sg;
-	unsigned long flags;
 	int i;
 	dma_addr_t addr;
 
@@ -2801,20 +2825,7 @@ pl330_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 			dev_err(pch->dmac->pif.dev,
 				"%s:%d Unable to fetch desc\n",
 				__func__, __LINE__);
-			if (!first)
-				return NULL;
-
-			spin_lock_irqsave(&pdmac->pool_lock, flags);
-
-			while (!list_empty(&first->node)) {
-				desc = list_entry(first->node.next,
-						struct dma_pl330_desc, node);
-				list_move_tail(&desc->node, &pdmac->desc_pool);
-			}
-
-			list_move_tail(&first->node, &pdmac->desc_pool);
-
-			spin_unlock_irqrestore(&pdmac->pool_lock, flags);
+			__pl330_giveback_desc(pdmac, first);
 
 			return NULL;
 		}
@@ -2855,6 +2866,26 @@ static irqreturn_t pl330_irq_handler(int irq, void *data)
 		return IRQ_NONE;
 }
 
+#define PL330_DMA_BUSWIDTHS \
+	BIT(DMA_SLAVE_BUSWIDTH_UNDEFINED) | \
+	BIT(DMA_SLAVE_BUSWIDTH_1_BYTE) | \
+	BIT(DMA_SLAVE_BUSWIDTH_2_BYTES) | \
+	BIT(DMA_SLAVE_BUSWIDTH_4_BYTES) | \
+	BIT(DMA_SLAVE_BUSWIDTH_8_BYTES)
+
+static int pl330_dma_device_slave_caps(struct dma_chan *dchan,
+	struct dma_slave_caps *caps)
+{
+	caps->src_addr_widths = PL330_DMA_BUSWIDTHS;
+	caps->dstn_addr_widths = PL330_DMA_BUSWIDTHS;
+	caps->directions = BIT(DMA_DEV_TO_MEM) | BIT(DMA_MEM_TO_DEV);
+	caps->cmd_pause = false;
+	caps->cmd_terminate = true;
+	caps->residue_granularity = DMA_RESIDUE_GRANULARITY_DESCRIPTOR;
+
+	return 0;
+}
+
 static int
 pl330_probe(struct amba_device *adev, const struct amba_id *id)
 {
@@ -2867,7 +2898,11 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 	int i, ret, irq;
 	int num_chan;
 
-	pdat = adev->dev.platform_data;
+	pdat = dev_get_platdata(&adev->dev);
+
+	ret = dma_set_mask_and_coherent(&adev->dev, DMA_BIT_MASK(32));
+	if (ret)
+		return ret;
 
 	/* Allocate a new DMAC and its Channels */
 	pdmac = devm_kzalloc(&adev->dev, sizeof(*pdmac), GFP_KERNEL);
@@ -2888,16 +2923,23 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 
 	amba_set_drvdata(adev, pdmac);
 
-	irq = adev->irq[0];
-	ret = request_irq(irq, pl330_irq_handler, 0,
-			dev_name(&adev->dev), pi);
-	if (ret)
-		return ret;
+	for (i = 0; i < AMBA_NR_IRQS; i++) {
+		irq = adev->irq[i];
+		if (irq) {
+			ret = devm_request_irq(&adev->dev, irq,
+					       pl330_irq_handler, 0,
+					       dev_name(&adev->dev), pi);
+			if (ret)
+				return ret;
+		} else {
+			break;
+		}
+	}
 
 	pi->pcfg.periph_id = adev->periphid;
 	ret = pl330_add(pi);
 	if (ret)
-		goto probe_err1;
+		return ret;
 
 	INIT_LIST_HEAD(&pdmac->desc_pool);
 	spin_lock_init(&pdmac->pool_lock);
@@ -2915,6 +2957,8 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 	else
 		num_chan = max_t(int, pi->pcfg.num_peri, pi->pcfg.num_chan);
 
+	pdmac->num_peripherals = num_chan;
+
 	pdmac->peripherals = kzalloc(num_chan * sizeof(*pch), GFP_KERNEL);
 	if (!pdmac->peripherals) {
 		ret = -ENOMEM;
@@ -2929,7 +2973,9 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 		else
 			pch->chan.private = adev->dev.of_node;
 
+		INIT_LIST_HEAD(&pch->submitted_list);
 		INIT_LIST_HEAD(&pch->work_list);
+		INIT_LIST_HEAD(&pch->completed_list);
 		spin_lock_init(&pch->lock);
 		pch->pl330_chid = NULL;
 		pch->chan.device = pd;
@@ -2959,6 +3005,7 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 	pd->device_prep_slave_sg = pl330_prep_slave_sg;
 	pd->device_control = pl330_control;
 	pd->device_issue_pending = pl330_issue_pending;
+	pd->device_slave_caps = pl330_dma_device_slave_caps;
 
 	ret = dma_async_device_register(pd);
 	if (ret) {
@@ -2975,6 +3022,17 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 		}
 	}
 
+	adev->dev.dma_parms = &pdmac->dma_parms;
+
+	/*
+	 * This is the limit for transfers with a buswidth of 1, larger
+	 * buswidths will have larger limits.
+	 */
+	ret = dma_set_max_seg_size(&adev->dev, 1900800);
+	if (ret)
+		dev_err(&adev->dev, "unable to set the seg size\n");
+
+
 	dev_info(&adev->dev,
 		"Loaded driver for PL330 DMAC-%d\n", adev->periphid);
 	dev_info(&adev->dev,
@@ -2985,8 +3043,6 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 
 	return 0;
 probe_err3:
-	amba_set_drvdata(adev, NULL);
-
 	/* Idle the DMAC */
 	list_for_each_entry_safe(pch, _p, &pdmac->ddma.channels,
 			chan.device_node) {
@@ -3000,8 +3056,6 @@ probe_err3:
 	}
 probe_err2:
 	pl330_del(pi);
-probe_err1:
-	free_irq(irq, pi);
 
 	return ret;
 }
@@ -3011,7 +3065,6 @@ static int pl330_remove(struct amba_device *adev)
 	struct dma_pl330_dmac *pdmac = amba_get_drvdata(adev);
 	struct dma_pl330_chan *pch, *_p;
 	struct pl330_info *pi;
-	int irq;
 
 	if (!pdmac)
 		return 0;
@@ -3020,7 +3073,6 @@ static int pl330_remove(struct amba_device *adev)
 		of_dma_controller_free(adev->dev.of_node);
 
 	dma_async_device_unregister(&pdmac->ddma);
-	amba_set_drvdata(adev, NULL);
 
 	/* Idle the DMAC */
 	list_for_each_entry_safe(pch, _p, &pdmac->ddma.channels,
@@ -3037,9 +3089,6 @@ static int pl330_remove(struct amba_device *adev)
 	pi = &pdmac->pif;
 
 	pl330_del(pi);
-
-	irq = adev->irq[0];
-	free_irq(irq, pi);
 
 	return 0;
 }

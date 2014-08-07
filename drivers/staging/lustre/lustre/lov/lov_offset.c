@@ -36,10 +36,9 @@
 
 #define DEBUG_SUBSYSTEM S_LOV
 
-#include <linux/libcfs/libcfs.h>
+#include "../../include/linux/libcfs/libcfs.h"
 
-#include <obd_class.h>
-#include <obd_lov.h>
+#include "../include/obd_class.h"
 
 #include "lov_internal.h"
 
@@ -52,10 +51,9 @@ obd_size lov_stripe_size(struct lov_stripe_md *lsm, obd_size ost_size,
 	obd_off swidth;
 	obd_size lov_size;
 	int magic = lsm->lsm_magic;
-	ENTRY;
 
 	if (ost_size == 0)
-		RETURN(0);
+		return 0;
 
 	LASSERT(lsm_op_find(magic) != NULL);
 	lsm_op_find(magic)->lsm_stripe_by_index(lsm, &stripeno, NULL, &swidth);
@@ -67,7 +65,7 @@ obd_size lov_stripe_size(struct lov_stripe_md *lsm, obd_size ost_size,
 	else
 		lov_size = (ost_size - 1) * swidth + (stripeno + 1) * ssize;
 
-	RETURN(lov_size);
+	return lov_size;
 }
 
 /* we have an offset in file backed by an lov and want to find out where
@@ -225,7 +223,7 @@ int lov_stripe_intersects(struct lov_stripe_md *lsm, int stripeno,
 	start_side = lov_stripe_offset(lsm, start, stripeno, obd_start);
 	end_side = lov_stripe_offset(lsm, end, stripeno, obd_end);
 
-	CDEBUG(D_INODE, "["LPU64"->"LPU64"] -> [(%d) "LPU64"->"LPU64" (%d)]\n",
+	CDEBUG(D_INODE, "[%llu->%llu] -> [(%d) %llu->%llu (%d)]\n",
 	       start, end, start_side, *obd_start, *obd_end, end_side);
 
 	/* this stripe doesn't intersect the file extent when neither

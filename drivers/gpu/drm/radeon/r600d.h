@@ -602,6 +602,7 @@
 #define		L2_BUSY						(1 << 0)
 
 #define	WAIT_UNTIL					0x8040
+#define         WAIT_CP_DMA_IDLE_bit                            (1 << 8)
 #define         WAIT_2D_IDLE_bit                                (1 << 14)
 #define         WAIT_3D_IDLE_bit                                (1 << 15)
 #define         WAIT_2D_IDLECLEAN_bit                           (1 << 16)
@@ -700,10 +701,17 @@
 #define RLC_UCODE_DATA                                    0x3f30
 
 #define SRBM_SOFT_RESET                                   0xe60
+#       define SOFT_RESET_BIF                             (1 << 1)
 #       define SOFT_RESET_DMA                             (1 << 12)
 #       define SOFT_RESET_RLC                             (1 << 13)
 #       define SOFT_RESET_UVD                             (1 << 18)
 #       define RV770_SOFT_RESET_DMA                       (1 << 20)
+
+#define BIF_SCRATCH0                                      0x5438
+
+#define BUS_CNTL                                          0x5420
+#       define BIOS_ROM_DIS                               (1 << 1)
+#       define VGA_COHE_SPEC_TIMER_DIS                    (1 << 9)
 
 #define CP_INT_CNTL                                       0xc124
 #       define CNTX_BUSY_INT_ENABLE                       (1 << 19)
@@ -932,6 +940,9 @@
 #define DCCG_AUDIO_DTO0_LOAD              0x051c
 #       define DTO_LOAD                   (1 << 31)
 #define DCCG_AUDIO_DTO0_CNTL              0x0520
+#       define DCCG_AUDIO_DTO_WALLCLOCK_RATIO(x) (((x) & 7) << 0)
+#       define DCCG_AUDIO_DTO_WALLCLOCK_RATIO_MASK 7
+#       define DCCG_AUDIO_DTO_WALLCLOCK_RATIO_SHIFT 0
 
 #define DCCG_AUDIO_DTO1_PHASE             0x0524
 #define DCCG_AUDIO_DTO1_MODULE            0x0528
@@ -955,6 +966,42 @@
 #       define DIG_MODE_TMDS_HDMI        3
 #       define DIG_MODE_SDVO             4
 #define DIG1_CNTL                        0x79a0
+
+#define AZ_F0_CODEC_PIN0_CONTROL_CHANNEL_SPEAKER          0x71bc
+#define		SPEAKER_ALLOCATION(x)			(((x) & 0x7f) << 0)
+#define		SPEAKER_ALLOCATION_MASK			(0x7f << 0)
+#define		SPEAKER_ALLOCATION_SHIFT		0
+#define		HDMI_CONNECTION				(1 << 16)
+#define		DP_CONNECTION				(1 << 17)
+
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR0        0x71c8 /* LPCM */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR1        0x71cc /* AC3 */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR2        0x71d0 /* MPEG1 */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR3        0x71d4 /* MP3 */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR4        0x71d8 /* MPEG2 */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR5        0x71dc /* AAC */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR6        0x71e0 /* DTS */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR7        0x71e4 /* ATRAC */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR8        0x71e8 /* one bit audio - leave at 0 (default) */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR9        0x71ec /* Dolby Digital */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR10       0x71f0 /* DTS-HD */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR11       0x71f4 /* MAT-MLP */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR12       0x71f8 /* DTS */
+#define AZ_F0_CODEC_PIN0_CONTROL_AUDIO_DESCRIPTOR13       0x71fc /* WMA Pro */
+#       define MAX_CHANNELS(x)                            (((x) & 0x7) << 0)
+/* max channels minus one.  7 = 8 channels */
+#       define SUPPORTED_FREQUENCIES(x)                   (((x) & 0xff) << 8)
+#       define DESCRIPTOR_BYTE_2(x)                       (((x) & 0xff) << 16)
+#       define SUPPORTED_FREQUENCIES_STEREO(x)            (((x) & 0xff) << 24) /* LPCM only */
+/* SUPPORTED_FREQUENCIES, SUPPORTED_FREQUENCIES_STEREO
+ * bit0 = 32 kHz
+ * bit1 = 44.1 kHz
+ * bit2 = 48 kHz
+ * bit3 = 88.2 kHz
+ * bit4 = 96 kHz
+ * bit5 = 176.4 kHz
+ * bit6 = 192 kHz
+ */
 
 /* rs6xx/rs740 and r6xx share the same HDMI blocks, however, rs6xx has only one
  * instance of the blocks while r6xx has 2.  DCE 3.0 cards are slightly
@@ -982,15 +1029,18 @@
 #define HDMI0_AUDIO_PACKET_CONTROL   0x7408
 #       define HDMI0_AUDIO_SAMPLE_SEND  (1 << 0)
 #       define HDMI0_AUDIO_DELAY_EN(x)  (((x) & 3) << 4)
+#       define HDMI0_AUDIO_DELAY_EN_MASK	(3 << 4)
 #       define HDMI0_AUDIO_SEND_MAX_PACKETS  (1 << 8)
 #       define HDMI0_AUDIO_TEST_EN         (1 << 12)
 #       define HDMI0_AUDIO_PACKETS_PER_LINE(x)  (((x) & 0x1f) << 16)
+#       define HDMI0_AUDIO_PACKETS_PER_LINE_MASK	(0x1f << 16)
 #       define HDMI0_AUDIO_CHANNEL_SWAP    (1 << 24)
 #       define HDMI0_60958_CS_UPDATE       (1 << 26)
 #       define HDMI0_AZ_FORMAT_WTRIG_MASK  (1 << 28)
 #       define HDMI0_AZ_FORMAT_WTRIG_ACK   (1 << 29)
 #define HDMI0_AUDIO_CRC_CONTROL      0x740c
 #       define HDMI0_AUDIO_CRC_EN    (1 << 0)
+#define DCE3_HDMI0_ACR_PACKET_CONTROL	0x740c
 #define HDMI0_VBI_PACKET_CONTROL     0x7410
 #       define HDMI0_NULL_SEND       (1 << 0)
 #       define HDMI0_GC_SEND         (1 << 4)
@@ -1000,14 +1050,16 @@
 #       define HDMI0_AVI_INFO_CONT   (1 << 1)
 #       define HDMI0_AUDIO_INFO_SEND (1 << 4)
 #       define HDMI0_AUDIO_INFO_CONT (1 << 5)
-#       define HDMI0_AUDIO_INFO_SOURCE (1 << 6) /* 0 - sound block; 1 - hmdi regs */
+#       define HDMI0_AUDIO_INFO_SOURCE (1 << 6) /* 0 - sound block; 1 - hdmi regs */
 #       define HDMI0_AUDIO_INFO_UPDATE (1 << 7)
 #       define HDMI0_MPEG_INFO_SEND  (1 << 8)
 #       define HDMI0_MPEG_INFO_CONT  (1 << 9)
 #       define HDMI0_MPEG_INFO_UPDATE  (1 << 10)
 #define HDMI0_INFOFRAME_CONTROL1     0x7418
 #       define HDMI0_AVI_INFO_LINE(x)  (((x) & 0x3f) << 0)
+#       define HDMI0_AVI_INFO_LINE_MASK		(0x3f << 0)
 #       define HDMI0_AUDIO_INFO_LINE(x)  (((x) & 0x3f) << 8)
+#       define HDMI0_AUDIO_INFO_LINE_MASK	(0x3f << 8)
 #       define HDMI0_MPEG_INFO_LINE(x)  (((x) & 0x3f) << 16)
 #define HDMI0_GENERIC_PACKET_CONTROL 0x741c
 #       define HDMI0_GENERIC0_SEND   (1 << 0)
@@ -1016,7 +1068,9 @@
 #       define HDMI0_GENERIC1_SEND   (1 << 4)
 #       define HDMI0_GENERIC1_CONT   (1 << 5)
 #       define HDMI0_GENERIC0_LINE(x)  (((x) & 0x3f) << 16)
+#       define HDMI0_GENERIC0_LINE_MASK		(0x3f << 16)
 #       define HDMI0_GENERIC1_LINE(x)  (((x) & 0x3f) << 24)
+#       define HDMI0_GENERIC1_LINE_MASK		(0x3f << 24)
 #define HDMI0_GC                     0x7428
 #       define HDMI0_GC_AVMUTE       (1 << 0)
 #define HDMI0_AVI_INFO0              0x7454
@@ -1072,16 +1126,22 @@
 #define HDMI0_GENERIC1_6             0x74a8
 #define HDMI0_ACR_32_0               0x74ac
 #       define HDMI0_ACR_CTS_32(x)   (((x) & 0xfffff) << 12)
+#       define HDMI0_ACR_CTS_32_MASK		(0xfffff << 12)
 #define HDMI0_ACR_32_1               0x74b0
 #       define HDMI0_ACR_N_32(x)   (((x) & 0xfffff) << 0)
+#       define HDMI0_ACR_N_32_MASK		(0xfffff << 0)
 #define HDMI0_ACR_44_0               0x74b4
 #       define HDMI0_ACR_CTS_44(x)   (((x) & 0xfffff) << 12)
+#       define HDMI0_ACR_CTS_44_MASK		(0xfffff << 12)
 #define HDMI0_ACR_44_1               0x74b8
 #       define HDMI0_ACR_N_44(x)   (((x) & 0xfffff) << 0)
+#       define HDMI0_ACR_N_44_MASK		(0xfffff << 0)
 #define HDMI0_ACR_48_0               0x74bc
 #       define HDMI0_ACR_CTS_48(x)   (((x) & 0xfffff) << 12)
+#       define HDMI0_ACR_CTS_48_MASK		(0xfffff << 12)
 #define HDMI0_ACR_48_1               0x74c0
 #       define HDMI0_ACR_N_48(x)   (((x) & 0xfffff) << 0)
+#       define HDMI0_ACR_N_48_MASK		(0xfffff << 0)
 #define HDMI0_ACR_STATUS_0           0x74c4
 #define HDMI0_ACR_STATUS_1           0x74c8
 #define HDMI0_AUDIO_INFO0            0x74cc
@@ -1101,14 +1161,17 @@
 #       define HDMI0_60958_CS_CATEGORY_CODE(x)      (((x) & 0xff) << 8)
 #       define HDMI0_60958_CS_SOURCE_NUMBER(x)      (((x) & 0xf) << 16)
 #       define HDMI0_60958_CS_CHANNEL_NUMBER_L(x)   (((x) & 0xf) << 20)
+#       define HDMI0_60958_CS_CHANNEL_NUMBER_L_MASK	(0xf << 20)
 #       define HDMI0_60958_CS_SAMPLING_FREQUENCY(x) (((x) & 0xf) << 24)
 #       define HDMI0_60958_CS_CLOCK_ACCURACY(x)     (((x) & 3) << 28)
+#       define HDMI0_60958_CS_CLOCK_ACCURACY_MASK	(3 << 28)
 #define HDMI0_60958_1                0x74d8
 #       define HDMI0_60958_CS_WORD_LENGTH(x)        (((x) & 0xf) << 0)
 #       define HDMI0_60958_CS_ORIGINAL_SAMPLING_FREQUENCY(x)   (((x) & 0xf) << 4)
 #       define HDMI0_60958_CS_VALID_L(x)   (((x) & 1) << 16)
 #       define HDMI0_60958_CS_VALID_R(x)   (((x) & 1) << 18)
 #       define HDMI0_60958_CS_CHANNEL_NUMBER_R(x)   (((x) & 0xf) << 20)
+#       define HDMI0_60958_CS_CHANNEL_NUMBER_R_MASK	(0xf << 20)
 #define HDMI0_ACR_PACKET_CONTROL     0x74dc
 #       define HDMI0_ACR_SEND        (1 << 0)
 #       define HDMI0_ACR_CONT        (1 << 1)
@@ -1119,6 +1182,7 @@
 #       define HDMI0_ACR_48          3
 #       define HDMI0_ACR_SOURCE      (1 << 8) /* 0 - hw; 1 - cts value */
 #       define HDMI0_ACR_AUTO_SEND   (1 << 12)
+#define DCE3_HDMI0_AUDIO_CRC_CONTROL	0x74dc
 #define HDMI0_RAMP_CONTROL0          0x74e0
 #       define HDMI0_RAMP_MAX_COUNT(x)   (((x) & 0xffffff) << 0)
 #define HDMI0_RAMP_CONTROL1          0x74e4
@@ -1158,6 +1222,34 @@
 #       define AFMT_AZ_FORMAT_WTRIG_MASK     (1 << 28)
 #       define AFMT_AZ_FORMAT_WTRIG_ACK      (1 << 29)
 #       define AFMT_AZ_AUDIO_ENABLE_CHG_ACK  (1 << 30)
+
+/* DCE3 FMT blocks */
+#define FMT_CONTROL                          0x6700
+#       define FMT_PIXEL_ENCODING            (1 << 16)
+        /* 0 = RGB 4:4:4 or YCbCr 4:4:4, 1 = YCbCr 4:2:2 */
+#define FMT_BIT_DEPTH_CONTROL                0x6710
+#       define FMT_TRUNCATE_EN               (1 << 0)
+#       define FMT_TRUNCATE_DEPTH            (1 << 4)
+#       define FMT_SPATIAL_DITHER_EN         (1 << 8)
+#       define FMT_SPATIAL_DITHER_MODE(x)    ((x) << 9)
+#       define FMT_SPATIAL_DITHER_DEPTH      (1 << 12)
+#       define FMT_FRAME_RANDOM_ENABLE       (1 << 13)
+#       define FMT_RGB_RANDOM_ENABLE         (1 << 14)
+#       define FMT_HIGHPASS_RANDOM_ENABLE    (1 << 15)
+#       define FMT_TEMPORAL_DITHER_EN        (1 << 16)
+#       define FMT_TEMPORAL_DITHER_DEPTH     (1 << 20)
+#       define FMT_TEMPORAL_DITHER_OFFSET(x) ((x) << 21)
+#       define FMT_TEMPORAL_LEVEL            (1 << 24)
+#       define FMT_TEMPORAL_DITHER_RESET     (1 << 25)
+#       define FMT_25FRC_SEL(x)              ((x) << 26)
+#       define FMT_50FRC_SEL(x)              ((x) << 28)
+#       define FMT_75FRC_SEL(x)              ((x) << 30)
+#define FMT_CLAMP_CONTROL                    0x672c
+#       define FMT_CLAMP_DATA_EN             (1 << 0)
+#       define FMT_CLAMP_COLOR_FORMAT(x)     ((x) << 16)
+#       define FMT_CLAMP_6BPC                0
+#       define FMT_CLAMP_8BPC                1
+#       define FMT_CLAMP_10BPC               2
 
 /* Power management */
 #define CG_SPLL_FUNC_CNTL                                 0x600
@@ -1483,7 +1575,7 @@
  */
 #              define PACKET3_CP_DMA_CP_SYNC       (1 << 31)
 /* COMMAND */
-#              define PACKET3_CP_DMA_CMD_SRC_SWAP(x) ((x) << 23)
+#              define PACKET3_CP_DMA_CMD_SRC_SWAP(x) ((x) << 22)
                 /* 0 - none
 		 * 1 - 8 in 16
 		 * 2 - 8 in 32
@@ -1507,6 +1599,7 @@
 #              define PACKET3_CP_DMA_CMD_DAIC      (1 << 29)
 #define	PACKET3_SURFACE_SYNC				0x43
 #              define PACKET3_CB0_DEST_BASE_ENA    (1 << 6)
+#              define PACKET3_FULL_CACHE_ENA       (1 << 20) /* r7xx+ only */
 #              define PACKET3_TC_ACTION_ENA        (1 << 23)
 #              define PACKET3_VC_ACTION_ENA        (1 << 24)
 #              define PACKET3_CB_ACTION_ENA        (1 << 25)

@@ -32,6 +32,22 @@ struct device_node;
 
 #ifdef CONFIG_EEH
 
+/* EEH subsystem flags */
+#define EEH_ENABLED		0x1	/* EEH enabled		*/
+#define EEH_FORCE_DISABLED	0x2	/* EEH disabled		*/
+#define EEH_PROBE_MODE_DEV	0x4	/* From PCI device	*/
+#define EEH_PROBE_MODE_DEVTREE	0x8	/* From device tree	*/
+
+/*
+ * Delay for PE reset, all in ms
+ *
+ * PCI specification has reset hold time of 100 milliseconds.
+ * We have 250 milliseconds here. The PCI bus settlement time
+ * is specified as 1.5 seconds and we have 1.8 seconds.
+ */
+#define EEH_PE_RST_HOLD_TIME		250
+#define EEH_PE_RST_SETTLE_TIME		1800
+
 /*
  * The struct is used to trace PE related EEH functionality.
  * In theory, there will have one instance of the struct to
@@ -53,7 +69,9 @@ struct device_node;
 
 #define EEH_PE_ISOLATED		(1 << 0)	/* Isolated PE		*/
 #define EEH_PE_RECOVERING	(1 << 1)	/* Recovering PE	*/
-#define EEH_PE_PHB_DEAD		(1 << 2)	/* Dead PHB		*/
+#define EEH_PE_RESET		(1 << 2)	/* PE reset in progress	*/
+
+#define EEH_PE_KEEP		(1 << 8)	/* Keep PE on hotplug	*/
 
 struct eeh_pe {
 	int type;			/* PE type: PHB/Bus/Device	*/
@@ -72,8 +90,8 @@ struct eeh_pe {
 	struct list_head child;		/* Child PEs			*/
 };
 
-#define eeh_pe_for_each_dev(pe, edev) \
-		list_for_each_entry(edev, &pe->edevs, list)
+#define eeh_pe_for_each_dev(pe, edev, tmp) \
+		list_for_each_entry_safe(edev, tmp, &pe->edevs, list)
 
 /*
  * The struct is used to trace EEH state for the associated
@@ -82,7 +100,15 @@ struct eeh_pe {
  * another tree except the currently existing tree of PCI
  * buses and PCI devices
  */
-#define EEH_DEV_IRQ_DISABLED	(1<<0)	/* Interrupt disabled		*/
+#define EEH_DEV_BRIDGE		(1 << 0)	/* PCI bridge		*/
+#define EEH_DEV_ROOT_PORT	(1 << 1)	/* PCIe root port	*/
+#define EEH_DEV_DS_PORT		(1 << 2)	/* Downstream port	*/
+#define EEH_DEV_IRQ_DISABLED	(1 << 3)	/* Interrupt disabled	*/
+#define EEH_DEV_DISCONNECTED	(1 << 4)	/* Removing from PE	*/
+
+#define EEH_DEV_NO_HANDLER	(1 << 8)	/* No error handler	*/
+#define EEH_DEV_SYSFS		(1 << 9)	/* Sysfs created	*/
+#define EEH_DEV_REMOVED		(1 << 10)	/* Removed permanently	*/
 
 struct eeh_dev {
 	int mode;			/* EEH mode			*/
@@ -90,11 +116,15 @@ struct eeh_dev {
 	int config_addr;		/* Config address		*/
 	int pe_config_addr;		/* PE config address		*/
 	u32 config_space[16];		/* Saved PCI config space	*/
+	int pcix_cap;			/* Saved PCIx capability	*/
+	int pcie_cap;			/* Saved PCIe capability	*/
+	int aer_cap;			/* Saved AER capability		*/
 	struct eeh_pe *pe;		/* Associated PE		*/
 	struct list_head list;		/* Form link list in the PE	*/
 	struct pci_controller *phb;	/* Associated PHB		*/
 	struct device_node *dn;		/* Associated device node	*/
 	struct pci_dev *pdev;		/* Associated PCI device	*/
+	struct pci_bus *bus;		/* PCI bus for partial hotplug	*/
 };
 
 static inline struct device_node *eeh_dev_to_of_node(struct eeh_dev *edev)
@@ -106,6 +136,16 @@ static inline struct pci_dev *eeh_dev_to_pci_dev(struct eeh_dev *edev)
 {
 	return edev ? edev->pdev : NULL;
 }
+
+/* Return values from eeh_ops::next_error */
+enum {
+	EEH_NEXT_ERR_NONE = 0,
+	EEH_NEXT_ERR_INF,
+	EEH_NEXT_ERR_FROZEN_PE,
+	EEH_NEXT_ERR_FENCED_PHB,
+	EEH_NEXT_ERR_DEAD_PHB,
+	EEH_NEXT_ERR_DEAD_IOC
+};
 
 /*
  * The struct is used to trace the registered EEH operation
@@ -147,29 +187,43 @@ struct eeh_ops {
 	int (*read_config)(struct device_node *dn, int where, int size, u32 *val);
 	int (*write_config)(struct device_node *dn, int where, int size, u32 val);
 	int (*next_error)(struct eeh_pe **pe);
+	int (*restore_config)(struct device_node *dn);
 };
 
+extern int eeh_subsystem_flags;
 extern struct eeh_ops *eeh_ops;
-extern int eeh_subsystem_enabled;
 extern raw_spinlock_t confirm_error_lock;
-extern int eeh_probe_mode;
 
-#define EEH_PROBE_MODE_DEV	(1<<0)	/* From PCI device	*/
-#define EEH_PROBE_MODE_DEVTREE	(1<<1)	/* From device tree	*/
+static inline bool eeh_enabled(void)
+{
+	if ((eeh_subsystem_flags & EEH_FORCE_DISABLED) ||
+	    !(eeh_subsystem_flags & EEH_ENABLED))
+		return false;
+
+	return true;
+}
+
+static inline void eeh_set_enable(bool mode)
+{
+	if (mode)
+		eeh_subsystem_flags |= EEH_ENABLED;
+	else
+		eeh_subsystem_flags &= ~EEH_ENABLED;
+}
 
 static inline void eeh_probe_mode_set(int flag)
 {
-	eeh_probe_mode = flag;
+	eeh_subsystem_flags |= flag;
 }
 
 static inline int eeh_probe_mode_devtree(void)
 {
-	return (eeh_probe_mode == EEH_PROBE_MODE_DEVTREE);
+	return (eeh_subsystem_flags & EEH_PROBE_MODE_DEVTREE);
 }
 
 static inline int eeh_probe_mode_dev(void)
 {
-	return (eeh_probe_mode == EEH_PROBE_MODE_DEV);
+	return (eeh_subsystem_flags & EEH_PROBE_MODE_DEV);
 }
 
 static inline void eeh_serialize_lock(unsigned long *flags)
@@ -193,11 +247,14 @@ int eeh_phb_pe_create(struct pci_controller *phb);
 struct eeh_pe *eeh_phb_pe_get(struct pci_controller *phb);
 struct eeh_pe *eeh_pe_get(struct eeh_dev *edev);
 int eeh_add_to_parent_pe(struct eeh_dev *edev);
-int eeh_rmv_from_parent_pe(struct eeh_dev *edev, int purge_pe);
+int eeh_rmv_from_parent_pe(struct eeh_dev *edev);
 void eeh_pe_update_time_stamp(struct eeh_pe *pe);
+void *eeh_pe_traverse(struct eeh_pe *root,
+		eeh_traverse_func fn, void *flag);
 void *eeh_pe_dev_traverse(struct eeh_pe *root,
 		eeh_traverse_func fn, void *flag);
 void eeh_pe_restore_bars(struct eeh_pe *pe);
+const char *eeh_pe_loc_get(struct eeh_pe *pe);
 struct pci_bus *eeh_pe_bus_get(struct eeh_pe *pe);
 
 void *eeh_dev_init(struct device_node *dn, void *data);
@@ -209,10 +266,12 @@ unsigned long eeh_check_failure(const volatile void __iomem *token,
 				unsigned long val);
 int eeh_dev_check_failure(struct eeh_dev *edev);
 void eeh_addr_cache_build(void);
+void eeh_add_device_early(struct device_node *);
 void eeh_add_device_tree_early(struct device_node *);
+void eeh_add_device_late(struct pci_dev *);
 void eeh_add_device_tree_late(struct pci_bus *);
 void eeh_add_sysfs_files(struct pci_bus *);
-void eeh_remove_bus_device(struct pci_dev *, int);
+void eeh_remove_device(struct pci_dev *);
 
 /**
  * EEH_POSSIBLE_ERROR() -- test for possible MMIO failure.
@@ -220,7 +279,7 @@ void eeh_remove_bus_device(struct pci_dev *, int);
  * If this macro yields TRUE, the caller relays to eeh_check_failure()
  * which does further tests out of line.
  */
-#define EEH_POSSIBLE_ERROR(val, type)	((val) == (type)~0 && eeh_subsystem_enabled)
+#define EEH_POSSIBLE_ERROR(val, type)	((val) == (type)~0 && eeh_enabled())
 
 /*
  * Reads from a device which has been isolated by EEH will return
@@ -230,6 +289,13 @@ void eeh_remove_bus_device(struct pci_dev *, int);
 #define EEH_IO_ERROR_VALUE(size)	(~0U >> ((4 - (size)) * 8))
 
 #else /* !CONFIG_EEH */
+
+static inline bool eeh_enabled(void)
+{
+        return false;
+}
+
+static inline void eeh_set_enable(bool mode) { }
 
 static inline int eeh_init(void)
 {
@@ -252,13 +318,17 @@ static inline unsigned long eeh_check_failure(const volatile void __iomem *token
 
 static inline void eeh_addr_cache_build(void) { }
 
+static inline void eeh_add_device_early(struct device_node *dn) { }
+
 static inline void eeh_add_device_tree_early(struct device_node *dn) { }
+
+static inline void eeh_add_device_late(struct pci_dev *dev) { }
 
 static inline void eeh_add_device_tree_late(struct pci_bus *bus) { }
 
 static inline void eeh_add_sysfs_files(struct pci_bus *bus) { }
 
-static inline void eeh_remove_bus_device(struct pci_dev *dev, int purge_pe) { }
+static inline void eeh_remove_device(struct pci_dev *dev) { }
 
 #define EEH_POSSIBLE_ERROR(val, type) (0)
 #define EEH_IO_ERROR_VALUE(size) (-1UL)

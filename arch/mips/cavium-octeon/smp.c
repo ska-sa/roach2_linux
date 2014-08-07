@@ -6,7 +6,6 @@
  * Copyright (C) 2004-2008, 2009, 2010 Cavium Networks
  */
 #include <linux/cpu.h>
-#include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/smp.h>
 #include <linux/interrupt.h>
@@ -173,7 +172,7 @@ static void octeon_boot_secondary(int cpu, struct task_struct *idle)
  * After we've done initial boot, this function is called to allow the
  * board code to clean up state, if needed
  */
-static void __cpuinit octeon_init_secondary(void)
+static void octeon_init_secondary(void)
 {
 	unsigned int sr;
 
@@ -219,15 +218,6 @@ void octeon_prepare_cpus(unsigned int max_cpus)
  */
 static void octeon_smp_finish(void)
 {
-#ifdef CONFIG_CAVIUM_GDB
-	unsigned long tmp;
-	/* Pulse MCD0 signal on Ctrl-C to stop all the cores. Also set the MCD0
-	   to be not masked by this core so we know the signal is received by
-	   someone */
-	asm volatile ("dmfc0 %0, $22\n"
-		      "ori   %0, %0, 0x9100\n" "dmtc0 %0, $22\n" : "=r" (tmp));
-#endif
-
 	octeon_user_io_init();
 
 	/* to generate the first CPU timer interrupt */
@@ -235,27 +225,10 @@ static void octeon_smp_finish(void)
 	local_irq_enable();
 }
 
-/**
- * Hook for after all CPUs are online
- */
-static void octeon_cpus_done(void)
-{
-#ifdef CONFIG_CAVIUM_GDB
-	unsigned long tmp;
-	/* Pulse MCD0 signal on Ctrl-C to stop all the cores. Also set the MCD0
-	   to be not masked by this core so we know the signal is received by
-	   someone */
-	asm volatile ("dmfc0 %0, $22\n"
-		      "ori   %0, %0, 0x9100\n" "dmtc0 %0, $22\n" : "=r" (tmp));
-#endif
-}
-
 #ifdef CONFIG_HOTPLUG_CPU
 
 /* State of each CPU. */
 DEFINE_PER_CPU(int, cpu_state);
-
-extern void fixup_irqs(void);
 
 static int octeon_cpu_disable(void)
 {
@@ -267,7 +240,7 @@ static int octeon_cpu_disable(void)
 	set_cpu_online(cpu, false);
 	cpu_clear(cpu, cpu_callin_map);
 	local_irq_disable();
-	fixup_irqs();
+	octeon_fixup_irqs();
 	local_irq_enable();
 
 	flush_cache_all();
@@ -375,7 +348,7 @@ static int octeon_update_boot_vector(unsigned int cpu)
 	return 0;
 }
 
-static int __cpuinit octeon_cpu_callback(struct notifier_block *nfb,
+static int octeon_cpu_callback(struct notifier_block *nfb,
 	unsigned long action, void *hcpu)
 {
 	unsigned int cpu = (unsigned long)hcpu;
@@ -394,7 +367,7 @@ static int __cpuinit octeon_cpu_callback(struct notifier_block *nfb,
 	return NOTIFY_OK;
 }
 
-static int __cpuinit register_cavium_notifier(void)
+static int register_cavium_notifier(void)
 {
 	hotcpu_notifier(octeon_cpu_callback, 0);
 	return 0;
@@ -408,7 +381,6 @@ struct plat_smp_ops octeon_smp_ops = {
 	.send_ipi_mask		= octeon_send_ipi_mask,
 	.init_secondary		= octeon_init_secondary,
 	.smp_finish		= octeon_smp_finish,
-	.cpus_done		= octeon_cpus_done,
 	.boot_secondary		= octeon_boot_secondary,
 	.smp_setup		= octeon_smp_setup,
 	.prepare_cpus		= octeon_prepare_cpus,

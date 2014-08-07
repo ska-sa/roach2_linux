@@ -181,11 +181,11 @@ struct drm_gem_cma_object *drm_fb_cma_get_gem_obj(struct drm_framebuffer *fb,
 EXPORT_SYMBOL_GPL(drm_fb_cma_get_gem_obj);
 
 #ifdef CONFIG_DEBUG_FS
-/**
+/*
  * drm_fb_cma_describe() - Helper to dump information about a single
  * CMA framebuffer object
  */
-void drm_fb_cma_describe(struct drm_framebuffer *fb, struct seq_file *m)
+static void drm_fb_cma_describe(struct drm_framebuffer *fb, struct seq_file *m)
 {
 	struct drm_fb_cma *fb_cma = to_fb_cma(fb);
 	int i, n = drm_format_num_planes(fb->pixel_format);
@@ -199,7 +199,6 @@ void drm_fb_cma_describe(struct drm_framebuffer *fb, struct seq_file *m)
 		drm_gem_cma_describe(fb_cma->obj[i], m);
 	}
 }
-EXPORT_SYMBOL_GPL(drm_fb_cma_describe);
 
 /**
  * drm_fb_cma_debugfs_show() - Helper to list CMA framebuffer objects
@@ -430,13 +429,8 @@ EXPORT_SYMBOL_GPL(drm_fbdev_cma_fini);
  */
 void drm_fbdev_cma_restore_mode(struct drm_fbdev_cma *fbdev_cma)
 {
-	if (fbdev_cma) {
-		struct drm_device *dev = fbdev_cma->fb_helper.dev;
-
-		drm_modeset_lock_all(dev);
-		drm_fb_helper_restore_fbdev_mode(&fbdev_cma->fb_helper);
-		drm_modeset_unlock_all(dev);
-	}
+	if (fbdev_cma)
+		drm_fb_helper_restore_fbdev_mode_unlocked(&fbdev_cma->fb_helper);
 }
 EXPORT_SYMBOL_GPL(drm_fbdev_cma_restore_mode);
 

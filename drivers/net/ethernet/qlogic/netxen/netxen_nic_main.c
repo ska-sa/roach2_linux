@@ -14,9 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston,
- * MA  02111-1307, USA.
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * The full GNU General Public License is included in this distribution
  * in the file called "COPYING".
@@ -197,7 +195,7 @@ netxen_napi_add(struct netxen_adapter *adapter, struct net_device *netdev)
 	for (ring = 0; ring < adapter->max_sds_rings; ring++) {
 		sds_ring = &recv_ctx->sds_rings[ring];
 		netif_napi_add(netdev, &sds_ring->napi,
-				netxen_nic_poll, NETXEN_NETDEV_WEIGHT);
+				netxen_nic_poll, NAPI_POLL_WEIGHT);
 	}
 
 	return 0;
@@ -459,16 +457,14 @@ static void netxen_pcie_strap_init(struct netxen_adapter *adapter)
 static void netxen_set_msix_bit(struct pci_dev *pdev, int enable)
 {
 	u32 control;
-	int pos;
 
-	pos = pci_find_capability(pdev, PCI_CAP_ID_MSIX);
-	if (pos) {
-		pci_read_config_dword(pdev, pos, &control);
+	if (pdev->msix_cap) {
+		pci_read_config_dword(pdev, pdev->msix_cap, &control);
 		if (enable)
 			control |= PCI_MSIX_FLAGS_ENABLE;
 		else
 			control = 0;
-		pci_write_config_dword(pdev, pos, control);
+		pci_write_config_dword(pdev, pdev->msix_cap, control);
 	}
 }
 
@@ -647,8 +643,9 @@ static int netxen_setup_msi_interrupts(struct netxen_adapter *adapter,
 
 	if (adapter->msix_supported) {
 		netxen_init_msix_entries(adapter, num_msix);
-		err = pci_enable_msix(pdev, adapter->msix_entries, num_msix);
-		if (err == 0) {
+		err = pci_enable_msix_range(pdev, adapter->msix_entries,
+					    num_msix, num_msix);
+		if (err > 0) {
 			adapter->flags |= NETXEN_NIC_MSIX_ENABLED;
 			netxen_set_msix_bit(pdev, 1);
 
@@ -1376,7 +1373,7 @@ netxen_setup_netdev(struct netxen_adapter *adapter,
 
 	netxen_nic_change_mtu(netdev, netdev->mtu);
 
-	SET_ETHTOOL_OPS(netdev, &netxen_nic_ethtool_ops);
+	netdev->ethtool_ops = &netxen_nic_ethtool_ops;
 
 	netdev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO |
 	                      NETIF_F_RXCSUM;
@@ -1415,6 +1412,32 @@ netxen_setup_netdev(struct netxen_adapter *adapter,
 	}
 
 	return 0;
+}
+
+#define NETXEN_ULA_ADAPTER_KEY		(0xdaddad01)
+#define NETXEN_NON_ULA_ADAPTER_KEY	(0xdaddad00)
+
+static void netxen_read_ula_info(struct netxen_adapter *adapter)
+{
+	u32 temp;
+
+	/* Print ULA info only once for an adapter */
+	if (adapter->portnum != 0)
+		return;
+
+	temp = NXRD32(adapter, NETXEN_ULA_KEY);
+	switch (temp) {
+	case NETXEN_ULA_ADAPTER_KEY:
+		dev_info(&adapter->pdev->dev, "ULA adapter");
+		break;
+	case NETXEN_NON_ULA_ADAPTER_KEY:
+		dev_info(&adapter->pdev->dev, "non ULA adapter");
+		break;
+	default:
+		break;
+	}
+
+	return;
 }
 
 #ifdef CONFIG_PCIEAER
@@ -1563,6 +1586,8 @@ netxen_nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_out_disable_msi;
 	}
 
+	netxen_read_ula_info(adapter);
+
 	err = netxen_setup_netdev(adapter, netdev);
 	if (err)
 		goto err_out_disable_msi;
@@ -1604,7 +1629,6 @@ err_out_free_res:
 	pci_release_regions(pdev);
 
 err_out_disable_pdev:
-	pci_set_drvdata(pdev, NULL);
 	pci_disable_device(pdev);
 	return err;
 }
@@ -1663,7 +1687,6 @@ static void netxen_nic_remove(struct pci_dev *pdev)
 
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
-	pci_set_drvdata(pdev, NULL);
 
 	free_netdev(netdev);
 }

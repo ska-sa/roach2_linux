@@ -17,22 +17,18 @@
  */
 #include "xfs.h"
 #include "xfs_fs.h"
-#include "xfs_log.h"
-#include "xfs_trans.h"
+#include "xfs_shared.h"
+#include "xfs_format.h"
+#include "xfs_log_format.h"
+#include "xfs_trans_resv.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_alloc.h"
-#include "xfs_quota.h"
 #include "xfs_mount.h"
-#include "xfs_bmap_btree.h"
 #include "xfs_inode.h"
-#include "xfs_itable.h"
-#include "xfs_bmap.h"
-#include "xfs_rtalloc.h"
 #include "xfs_error.h"
-#include "xfs_attr.h"
-#include "xfs_buf_item.h"
+#include "xfs_trans.h"
 #include "xfs_trans_priv.h"
+#include "xfs_quota.h"
 #include "xfs_qm.h"
 
 STATIC void	xfs_trans_alloc_dqinfo(xfs_trans_t *);
@@ -163,8 +159,10 @@ xfs_trans_mod_dquot_byino(
 
 	if (XFS_IS_UQUOTA_ON(mp) && ip->i_udquot)
 		(void) xfs_trans_mod_dquot(tp, ip->i_udquot, field, delta);
-	if (XFS_IS_OQUOTA_ON(mp) && ip->i_gdquot)
+	if (XFS_IS_GQUOTA_ON(mp) && ip->i_gdquot)
 		(void) xfs_trans_mod_dquot(tp, ip->i_gdquot, field, delta);
+	if (XFS_IS_PQUOTA_ON(mp) && ip->i_pdquot)
+		(void) xfs_trans_mod_dquot(tp, ip->i_pdquot, field, delta);
 }
 
 STATIC struct xfs_dqtrx *
@@ -177,8 +175,12 @@ xfs_trans_get_dqtrx(
 
 	if (XFS_QM_ISUDQ(dqp))
 		qa = tp->t_dqinfo->dqs[XFS_QM_TRANS_USR];
-	else
+	else if (XFS_QM_ISGDQ(dqp))
 		qa = tp->t_dqinfo->dqs[XFS_QM_TRANS_GRP];
+	else if (XFS_QM_ISPDQ(dqp))
+		qa = tp->t_dqinfo->dqs[XFS_QM_TRANS_PRJ];
+	else
+		return NULL;
 
 	for (i = 0; i < XFS_QM_TRANS_MAXDQS; i++) {
 		if (qa[i].qt_dquot == NULL ||
@@ -291,11 +293,10 @@ xfs_trans_mod_dquot(
 
 
 /*
- * Given an array of dqtrx structures, lock all the dquots associated
- * and join them to the transaction, provided they have been modified.
- * We know that the highest number of dquots (of one type - usr OR grp),
- * involved in a transaction is 2 and that both usr and grp combined - 3.
- * So, we don't attempt to make this very generic.
+ * Given an array of dqtrx structures, lock all the dquots associated and join
+ * them to the transaction, provided they have been modified.  We know that the
+ * highest number of dquots of one type - usr, grp and prj - involved in a
+ * transaction is 3 so we don't need to make this very generic.
  */
 STATIC void
 xfs_trans_dqlockedjoin(
@@ -728,8 +729,8 @@ error_return:
 
 /*
  * Given dquot(s), make disk block and/or inode reservations against them.
- * The fact that this does the reservation against both the usr and
- * grp/prj quotas is important, because this follows a both-or-nothing
+ * The fact that this does the reservation against user, group and
+ * project quotas is important, because this follows a all-or-nothing
  * approach.
  *
  * flags = XFS_QMOPT_FORCE_RES evades limit enforcement. Used by chown.
@@ -744,6 +745,7 @@ xfs_trans_reserve_quota_bydquots(
 	struct xfs_mount	*mp,
 	struct xfs_dquot	*udqp,
 	struct xfs_dquot	*gdqp,
+	struct xfs_dquot	*pdqp,
 	long			nblks,
 	long			ninos,
 	uint			flags)
@@ -771,11 +773,21 @@ xfs_trans_reserve_quota_bydquots(
 			goto unwind_usr;
 	}
 
+	if (pdqp) {
+		error = xfs_trans_dqresv(tp, mp, pdqp, nblks, ninos, flags);
+		if (error)
+			goto unwind_grp;
+	}
+
 	/*
 	 * Didn't change anything critical, so, no need to log
 	 */
 	return 0;
 
+unwind_grp:
+	flags |= XFS_QMOPT_FORCE_RES;
+	if (gdqp)
+		xfs_trans_dqresv(tp, mp, gdqp, -nblks, -ninos, flags);
 unwind_usr:
 	flags |= XFS_QMOPT_FORCE_RES;
 	if (udqp)
@@ -817,6 +829,7 @@ xfs_trans_reserve_quota_nblks(
 	 */
 	return xfs_trans_reserve_quota_bydquots(tp, mp,
 						ip->i_udquot, ip->i_gdquot,
+						ip->i_pdquot,
 						nblks, ninos, flags);
 }
 

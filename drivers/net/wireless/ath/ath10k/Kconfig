@@ -1,6 +1,6 @@
 config ATH10K
         tristate "Atheros 802.11ac wireless cards support"
-        depends on MAC80211
+        depends on MAC80211 && HAS_DMA
 	select ATH_COMMON
         ---help---
           This module adds support for wireless adapters based on
@@ -37,3 +37,10 @@ config ATH10K_TRACING
 	---help---
 	  Select this to ath10k use tracing infrastructure.
 
+config ATH10K_DFS_CERTIFIED
+	bool "Atheros DFS support for certified platforms"
+	depends on ATH10K && CFG80211_CERTIFICATION_ONUS
+	default n
+	---help---
+	This option enables DFS support for initiating radiation on
+	ath10k.

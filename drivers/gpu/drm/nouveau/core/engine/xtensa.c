@@ -112,13 +112,19 @@ _nouveau_xtensa_init(struct nouveau_object *object)
 		snprintf(name, sizeof(name), "nouveau/nv84_xuc%03x",
 			 xtensa->addr >> 12);
 
-		ret = request_firmware(&fw, name, &device->pdev->dev);
+		ret = request_firmware(&fw, name, nv_device_base(device));
 		if (ret) {
 			nv_warn(xtensa, "unable to load firmware %s\n", name);
 			return ret;
 		}
 
-		ret = nouveau_gpuobj_new(object, NULL, fw->size, 0x1000, 0,
+		if (fw->size > 0x40000) {
+			nv_warn(xtensa, "firmware %s too large\n", name);
+			release_firmware(fw);
+			return -EINVAL;
+		}
+
+		ret = nouveau_gpuobj_new(object, NULL, 0x40000, 0x1000, 0,
 					 &xtensa->gpu_fw);
 		if (ret) {
 			release_firmware(fw);

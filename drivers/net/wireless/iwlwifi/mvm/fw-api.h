@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -70,18 +70,19 @@
 #include "fw-api-mac.h"
 #include "fw-api-power.h"
 #include "fw-api-d3.h"
-#include "fw-api-bt-coex.h"
+#include "fw-api-coex.h"
+#include "fw-api-scan.h"
 
-/* queue and FIFO numbers by usage */
+/* maximal number of Tx queues in any platform */
+#define IWL_MVM_MAX_QUEUES	20
+
+/* Tx queue numbers */
 enum {
 	IWL_MVM_OFFCHANNEL_QUEUE = 8,
 	IWL_MVM_CMD_QUEUE = 9,
-	IWL_MVM_AUX_QUEUE = 15,
-	IWL_MVM_FIRST_AGG_QUEUE = 16,
-	IWL_MVM_NUM_QUEUES = 20,
-	IWL_MVM_LAST_AGG_QUEUE = IWL_MVM_NUM_QUEUES - 1,
-	IWL_MVM_CMD_FIFO = 7
 };
+
+#define IWL_MVM_CMD_FIFO	7
 
 #define IWL_MVM_STATION_COUNT	16
 
@@ -95,8 +96,10 @@ enum {
 	/* PHY context commands */
 	PHY_CONTEXT_CMD = 0x8,
 	DBG_CFG = 0x9,
+	ANTENNA_COUPLING_NOTIFICATION = 0xa,
 
 	/* station table */
+	ADD_STA_KEY = 0x17,
 	ADD_STA = 0x18,
 	REMOVE_STA = 0x19,
 
@@ -114,6 +117,7 @@ enum {
 	TIME_EVENT_NOTIFICATION = 0x2a,
 	BINDING_CONTEXT_CMD = 0x2b,
 	TIME_QUOTA_CMD = 0x2c,
+	NON_QOS_TX_COUNTER_CMD = 0x2d,
 
 	LQ_CMD = 0x4e,
 
@@ -130,14 +134,16 @@ enum {
 	SCAN_OFFLOAD_COMPLETE = 0x6D,
 	SCAN_OFFLOAD_UPDATE_PROFILES_CMD = 0x6E,
 	SCAN_OFFLOAD_CONFIG_CMD = 0x6f,
+	MATCH_FOUND_NOTIFICATION = 0xd9,
 
 	/* Phy */
 	PHY_CONFIGURATION_CMD = 0x6a,
 	CALIB_RES_NOTIF_PHY_DB = 0x6b,
 	/* PHY_DB_CMD = 0x6c, */
 
-	/* Power */
+	/* Power - legacy power table command */
 	POWER_TABLE_CMD = 0x77,
+	PSM_UAPSD_AP_MISBEHAVING_NOTIFICATION = 0x78,
 
 	/* Thermal Throttling*/
 	REPLY_THERMAL_MNG_BACKOFF = 0x7e,
@@ -159,12 +165,17 @@ enum {
 	TX_ANT_CONFIGURATION_CMD = 0x98,
 	BT_CONFIG = 0x9b,
 	STATISTICS_NOTIFICATION = 0x9d,
+	EOSP_NOTIFICATION = 0x9e,
+	REDUCE_TX_POWER_CMD = 0x9f,
 
 	/* RF-KILL commands and notifications */
 	CARD_STATE_CMD = 0xa0,
 	CARD_STATE_NOTIFICATION = 0xa1,
 
 	MISSED_BEACONS_NOTIFICATION = 0xa2,
+
+	/* Power - new power table command */
+	MAC_PM_POWER_TABLE = 0xa9,
 
 	REPLY_RX_PHY_CMD = 0xc0,
 	REPLY_RX_MPDU_CMD = 0xc1,
@@ -174,12 +185,15 @@ enum {
 	BT_COEX_PRIO_TABLE = 0xcc,
 	BT_COEX_PROT_ENV = 0xcd,
 	BT_PROFILE_NOTIFICATION = 0xce,
+	BT_COEX_CI = 0x5d,
 
+	REPLY_SF_CFG_CMD = 0xd1,
 	REPLY_BEACON_FILTERING_CMD = 0xd2,
 
 	REPLY_DEBUG_CMD = 0xf0,
 	DEBUG_LOG_MSG = 0xf7,
 
+	BCAST_FILTER_CMD = 0xcf,
 	MCAST_FILTER_CMD = 0xd0,
 
 	/* D3 commands/notifications */
@@ -187,6 +201,7 @@ enum {
 	PROT_OFFLOAD_CONFIG_CMD = 0xd4,
 	OFFLOADS_QUERY_CMD = 0xd5,
 	REMOTE_WAKE_CONFIG_CMD = 0xd6,
+	D0I3_END_CMD = 0xed,
 
 	/* for WoWLAN in particular */
 	WOWLAN_PATTERNS = 0xe0,
@@ -222,6 +237,19 @@ struct iwl_cmd_response {
 struct iwl_tx_ant_cfg_cmd {
 	__le32 valid;
 } __packed;
+
+/**
+ * struct iwl_reduce_tx_power_cmd - TX power reduction command
+ * REDUCE_TX_POWER_CMD = 0x9f
+ * @flags: (reserved for future implementation)
+ * @mac_context_id: id of the mac ctx for which we are reducing TX power.
+ * @pwr_restriction: TX power restriction in dBms.
+ */
+struct iwl_reduce_tx_power_cmd {
+	u8 flags;
+	u8 mac_context_id;
+	__le16 pwr_restriction;
+} __packed; /* TX_REDUCED_POWER_API_S_VER_1 */
 
 /*
  * Calibration control struct.
@@ -290,14 +318,12 @@ enum {
 
 /* Section types for NVM_ACCESS_CMD */
 enum {
-	NVM_SECTION_TYPE_HW = 0,
-	NVM_SECTION_TYPE_SW,
-	NVM_SECTION_TYPE_PAPD,
-	NVM_SECTION_TYPE_BT,
-	NVM_SECTION_TYPE_CALIBRATION,
-	NVM_SECTION_TYPE_PRODUCTION,
-	NVM_SECTION_TYPE_POST_FCS_CALIB,
-	NVM_NUM_OF_SECTIONS,
+	NVM_SECTION_TYPE_SW = 1,
+	NVM_SECTION_TYPE_REGULATORY = 3,
+	NVM_SECTION_TYPE_CALIBRATION = 4,
+	NVM_SECTION_TYPE_PRODUCTION = 5,
+	NVM_SECTION_TYPE_MAC_OVERRIDE = 11,
+	NVM_MAX_NUM_SECTIONS = 12,
 };
 
 /**
@@ -388,6 +414,35 @@ struct mvm_alive_resp {
 	__le32 alive_counter_ptr;
 	__le32 scd_base_ptr;		/* SRAM address for SCD */
 } __packed; /* ALIVE_RES_API_S_VER_1 */
+
+struct mvm_alive_resp_ver2 {
+	__le16 status;
+	__le16 flags;
+	u8 ucode_minor;
+	u8 ucode_major;
+	__le16 id;
+	u8 api_minor;
+	u8 api_major;
+	u8 ver_subtype;
+	u8 ver_type;
+	u8 mac;
+	u8 opt;
+	__le16 reserved2;
+	__le32 timestamp;
+	__le32 error_event_table_ptr;	/* SRAM address for error log */
+	__le32 log_event_table_ptr;	/* SRAM address for LMAC event log */
+	__le32 cpu_register_ptr;
+	__le32 dbgm_config_ptr;
+	__le32 alive_counter_ptr;
+	__le32 scd_base_ptr;		/* SRAM address for SCD */
+	__le32 st_fwrd_addr;		/* pointer to Store and forward */
+	__le32 st_fwrd_size;
+	u8 umac_minor;			/* UMAC version: minor */
+	u8 umac_major;			/* UMAC version: major */
+	__le16 umac_id;			/* UMAC version: id */
+	__le32 error_info_addr;		/* SRAM address for UMAC error log */
+	__le32 dbg_print_buff_addr;
+} __packed; /* ALIVE_RES_API_S_VER_2 */
 
 /* Error response/notification */
 enum {
@@ -482,71 +537,155 @@ enum iwl_time_event_type {
 	TE_MAX
 }; /* MAC_EVENT_TYPE_API_E_VER_1 */
 
-/* Time Event dependencies: none, on another TE, or in a specific time */
-enum {
-	TE_INDEPENDENT		= 0,
-	TE_DEP_OTHER		= 1,
-	TE_DEP_TSF		= 2,
-	TE_EVENT_SOCIOPATHIC	= 4,
-}; /* MAC_EVENT_DEPENDENCY_POLICY_API_E_VER_2 */
-/*
- * Supported Time event notifications configuration.
- * A notification (both event and fragment) includes a status indicating weather
- * the FW was able to schedule the event or not. For fragment start/end
- * notification the status is always success. There is no start/end fragment
- * notification for monolithic events.
- *
- * @TE_NOTIF_NONE: no notifications
- * @TE_NOTIF_HOST_EVENT_START: request/receive notification on event start
- * @TE_NOTIF_HOST_EVENT_END:request/receive notification on event end
- * @TE_NOTIF_INTERNAL_EVENT_START: internal FW use
- * @TE_NOTIF_INTERNAL_EVENT_END: internal FW use.
- * @TE_NOTIF_HOST_FRAG_START: request/receive notification on frag start
- * @TE_NOTIF_HOST_FRAG_END:request/receive notification on frag end
- * @TE_NOTIF_INTERNAL_FRAG_START: internal FW use.
- * @TE_NOTIF_INTERNAL_FRAG_END: internal FW use.
- */
-enum {
-	TE_NOTIF_NONE = 0,
-	TE_NOTIF_HOST_EVENT_START = 0x1,
-	TE_NOTIF_HOST_EVENT_END = 0x2,
-	TE_NOTIF_INTERNAL_EVENT_START = 0x4,
-	TE_NOTIF_INTERNAL_EVENT_END = 0x8,
-	TE_NOTIF_HOST_FRAG_START = 0x10,
-	TE_NOTIF_HOST_FRAG_END = 0x20,
-	TE_NOTIF_INTERNAL_FRAG_START = 0x40,
-	TE_NOTIF_INTERNAL_FRAG_END = 0x80
-}; /* MAC_EVENT_ACTION_API_E_VER_2 */
+
+
+/* Time event - defines for command API v1 */
 
 /*
- * @TE_FRAG_NONE: fragmentation of the time event is NOT allowed.
- * @TE_FRAG_SINGLE: fragmentation of the time event is allowed, but only
- *  the first fragment is scheduled.
- * @TE_FRAG_DUAL: fragmentation of the time event is allowed, but only
- *  the first 2 fragments are scheduled.
- * @TE_FRAG_ENDLESS: fragmentation of the time event is allowed, and any number
- *  of fragments are valid.
+ * @TE_V1_FRAG_NONE: fragmentation of the time event is NOT allowed.
+ * @TE_V1_FRAG_SINGLE: fragmentation of the time event is allowed, but only
+ *	the first fragment is scheduled.
+ * @TE_V1_FRAG_DUAL: fragmentation of the time event is allowed, but only
+ *	the first 2 fragments are scheduled.
+ * @TE_V1_FRAG_ENDLESS: fragmentation of the time event is allowed, and any
+ *	number of fragments are valid.
  *
  * Other than the constant defined above, specifying a fragmentation value 'x'
  * means that the event can be fragmented but only the first 'x' will be
  * scheduled.
  */
 enum {
-	TE_FRAG_NONE = 0,
-	TE_FRAG_SINGLE = 1,
-	TE_FRAG_DUAL = 2,
-	TE_FRAG_ENDLESS = 0xffffffff
+	TE_V1_FRAG_NONE = 0,
+	TE_V1_FRAG_SINGLE = 1,
+	TE_V1_FRAG_DUAL = 2,
+	TE_V1_FRAG_ENDLESS = 0xffffffff
+};
+
+/* If a Time Event can be fragmented, this is the max number of fragments */
+#define TE_V1_FRAG_MAX_MSK	0x0fffffff
+/* Repeat the time event endlessly (until removed) */
+#define TE_V1_REPEAT_ENDLESS	0xffffffff
+/* If a Time Event has bounded repetitions, this is the maximal value */
+#define TE_V1_REPEAT_MAX_MSK_V1	0x0fffffff
+
+/* Time Event dependencies: none, on another TE, or in a specific time */
+enum {
+	TE_V1_INDEPENDENT		= 0,
+	TE_V1_DEP_OTHER			= BIT(0),
+	TE_V1_DEP_TSF			= BIT(1),
+	TE_V1_EVENT_SOCIOPATHIC		= BIT(2),
+}; /* MAC_EVENT_DEPENDENCY_POLICY_API_E_VER_2 */
+
+/*
+ * @TE_V1_NOTIF_NONE: no notifications
+ * @TE_V1_NOTIF_HOST_EVENT_START: request/receive notification on event start
+ * @TE_V1_NOTIF_HOST_EVENT_END:request/receive notification on event end
+ * @TE_V1_NOTIF_INTERNAL_EVENT_START: internal FW use
+ * @TE_V1_NOTIF_INTERNAL_EVENT_END: internal FW use.
+ * @TE_V1_NOTIF_HOST_FRAG_START: request/receive notification on frag start
+ * @TE_V1_NOTIF_HOST_FRAG_END:request/receive notification on frag end
+ * @TE_V1_NOTIF_INTERNAL_FRAG_START: internal FW use.
+ * @TE_V1_NOTIF_INTERNAL_FRAG_END: internal FW use.
+ *
+ * Supported Time event notifications configuration.
+ * A notification (both event and fragment) includes a status indicating weather
+ * the FW was able to schedule the event or not. For fragment start/end
+ * notification the status is always success. There is no start/end fragment
+ * notification for monolithic events.
+ */
+enum {
+	TE_V1_NOTIF_NONE = 0,
+	TE_V1_NOTIF_HOST_EVENT_START = BIT(0),
+	TE_V1_NOTIF_HOST_EVENT_END = BIT(1),
+	TE_V1_NOTIF_INTERNAL_EVENT_START = BIT(2),
+	TE_V1_NOTIF_INTERNAL_EVENT_END = BIT(3),
+	TE_V1_NOTIF_HOST_FRAG_START = BIT(4),
+	TE_V1_NOTIF_HOST_FRAG_END = BIT(5),
+	TE_V1_NOTIF_INTERNAL_FRAG_START = BIT(6),
+	TE_V1_NOTIF_INTERNAL_FRAG_END = BIT(7),
+}; /* MAC_EVENT_ACTION_API_E_VER_2 */
+
+/* Time event - defines for command API */
+
+/*
+ * @TE_V2_FRAG_NONE: fragmentation of the time event is NOT allowed.
+ * @TE_V2_FRAG_SINGLE: fragmentation of the time event is allowed, but only
+ *  the first fragment is scheduled.
+ * @TE_V2_FRAG_DUAL: fragmentation of the time event is allowed, but only
+ *  the first 2 fragments are scheduled.
+ * @TE_V2_FRAG_ENDLESS: fragmentation of the time event is allowed, and any
+ *  number of fragments are valid.
+ *
+ * Other than the constant defined above, specifying a fragmentation value 'x'
+ * means that the event can be fragmented but only the first 'x' will be
+ * scheduled.
+ */
+enum {
+	TE_V2_FRAG_NONE = 0,
+	TE_V2_FRAG_SINGLE = 1,
+	TE_V2_FRAG_DUAL = 2,
+	TE_V2_FRAG_MAX = 0xfe,
+	TE_V2_FRAG_ENDLESS = 0xff
 };
 
 /* Repeat the time event endlessly (until removed) */
-#define TE_REPEAT_ENDLESS	(0xffffffff)
+#define TE_V2_REPEAT_ENDLESS	0xff
 /* If a Time Event has bounded repetitions, this is the maximal value */
-#define TE_REPEAT_MAX_MSK	(0x0fffffff)
-/* If a Time Event can be fragmented, this is the max number of fragments */
-#define TE_FRAG_MAX_MSK		(0x0fffffff)
+#define TE_V2_REPEAT_MAX	0xfe
+
+#define TE_V2_PLACEMENT_POS	12
+#define TE_V2_ABSENCE_POS	15
+
+/* Time event policy values
+ * A notification (both event and fragment) includes a status indicating weather
+ * the FW was able to schedule the event or not. For fragment start/end
+ * notification the status is always success. There is no start/end fragment
+ * notification for monolithic events.
+ *
+ * @TE_V2_DEFAULT_POLICY: independent, social, present, unoticable
+ * @TE_V2_NOTIF_HOST_EVENT_START: request/receive notification on event start
+ * @TE_V2_NOTIF_HOST_EVENT_END:request/receive notification on event end
+ * @TE_V2_NOTIF_INTERNAL_EVENT_START: internal FW use
+ * @TE_V2_NOTIF_INTERNAL_EVENT_END: internal FW use.
+ * @TE_V2_NOTIF_HOST_FRAG_START: request/receive notification on frag start
+ * @TE_V2_NOTIF_HOST_FRAG_END:request/receive notification on frag end
+ * @TE_V2_NOTIF_INTERNAL_FRAG_START: internal FW use.
+ * @TE_V2_NOTIF_INTERNAL_FRAG_END: internal FW use.
+ * @TE_V2_DEP_OTHER: depends on another time event
+ * @TE_V2_DEP_TSF: depends on a specific time
+ * @TE_V2_EVENT_SOCIOPATHIC: can't co-exist with other events of tha same MAC
+ * @TE_V2_ABSENCE: are we present or absent during the Time Event.
+ */
+enum {
+	TE_V2_DEFAULT_POLICY = 0x0,
+
+	/* notifications (event start/stop, fragment start/stop) */
+	TE_V2_NOTIF_HOST_EVENT_START = BIT(0),
+	TE_V2_NOTIF_HOST_EVENT_END = BIT(1),
+	TE_V2_NOTIF_INTERNAL_EVENT_START = BIT(2),
+	TE_V2_NOTIF_INTERNAL_EVENT_END = BIT(3),
+
+	TE_V2_NOTIF_HOST_FRAG_START = BIT(4),
+	TE_V2_NOTIF_HOST_FRAG_END = BIT(5),
+	TE_V2_NOTIF_INTERNAL_FRAG_START = BIT(6),
+	TE_V2_NOTIF_INTERNAL_FRAG_END = BIT(7),
+	T2_V2_START_IMMEDIATELY = BIT(11),
+
+	TE_V2_NOTIF_MSK = 0xff,
+
+	/* placement characteristics */
+	TE_V2_DEP_OTHER = BIT(TE_V2_PLACEMENT_POS),
+	TE_V2_DEP_TSF = BIT(TE_V2_PLACEMENT_POS + 1),
+	TE_V2_EVENT_SOCIOPATHIC = BIT(TE_V2_PLACEMENT_POS + 2),
+
+	/* are we present or absent during the Time Event. */
+	TE_V2_ABSENCE = BIT(TE_V2_ABSENCE_POS),
+};
 
 /**
- * struct iwl_time_event_cmd - configuring Time Events
+ * struct iwl_time_event_cmd_api - configuring Time Events
+ * with struct MAC_TIME_EVENT_DATA_API_S_VER_2 (see also
+ * with version 1. determined by IWL_UCODE_TLV_FLAGS)
  * ( TIME_EVENT_CMD = 0x29 )
  * @id_and_color: ID and color of the relevant MAC
  * @action: action to perform, one of FW_CTXT_ACTION_*
@@ -558,32 +697,30 @@ enum {
  * @max_delay: maximum delay to event's start (apply time), in TU
  * @depends_on: the unique ID of the event we depend on (if any)
  * @interval: interval between repetitions, in TU
- * @interval_reciprocal: 2^32 / interval
  * @duration: duration of event in TU
  * @repeat: how many repetitions to do, can be TE_REPEAT_ENDLESS
- * @dep_policy: one of TE_INDEPENDENT, TE_DEP_OTHER, TE_DEP_TSF
- * @is_present: 0 or 1, are we present or absent during the Time Event
  * @max_frags: maximal number of fragments the Time Event can be divided to
- * @notify: notifications using TE_NOTIF_* (whom to notify when)
+ * @policy: defines whether uCode shall notify the host or other uCode modules
+ *	on event and/or fragment start and/or end
+ *	using one of TE_INDEPENDENT, TE_DEP_OTHER, TE_DEP_TSF
+ *	TE_EVENT_SOCIOPATHIC
+ *	using TE_ABSENCE and using TE_NOTIF_*
  */
 struct iwl_time_event_cmd {
 	/* COMMON_INDEX_HDR_API_S_VER_1 */
 	__le32 id_and_color;
 	__le32 action;
 	__le32 id;
-	/* MAC_TIME_EVENT_DATA_API_S_VER_1 */
+	/* MAC_TIME_EVENT_DATA_API_S_VER_2 */
 	__le32 apply_time;
 	__le32 max_delay;
-	__le32 dep_policy;
 	__le32 depends_on;
-	__le32 is_present;
-	__le32 max_frags;
 	__le32 interval;
-	__le32 interval_reciprocal;
 	__le32 duration;
-	__le32 repeat;
-	__le32 notify;
-} __packed; /* MAC_TIME_EVENT_CMD_API_S_VER_1 */
+	u8 repeat;
+	u8 max_frags;
+	__le16 policy;
+} __packed; /* MAC_TIME_EVENT_CMD_API_S_VER_2 */
 
 /**
  * struct iwl_time_event_resp - response structure to iwl_time_event_cmd
@@ -765,6 +902,14 @@ struct iwl_phy_context_cmd {
 } __packed; /* PHY_CONTEXT_CMD_API_VER_1 */
 
 #define IWL_RX_INFO_PHY_CNT 8
+#define IWL_RX_INFO_ENERGY_ANT_ABC_IDX 1
+#define IWL_RX_INFO_ENERGY_ANT_A_MSK 0x000000ff
+#define IWL_RX_INFO_ENERGY_ANT_B_MSK 0x0000ff00
+#define IWL_RX_INFO_ENERGY_ANT_C_MSK 0x00ff0000
+#define IWL_RX_INFO_ENERGY_ANT_A_POS 0
+#define IWL_RX_INFO_ENERGY_ANT_B_POS 8
+#define IWL_RX_INFO_ENERGY_ANT_C_POS 16
+
 #define IWL_RX_INFO_AGC_IDX 1
 #define IWL_RX_INFO_RSSI_AB_IDX 2
 #define IWL_OFDM_AGC_A_MSK 0x0000007f
@@ -897,6 +1042,7 @@ enum iwl_mvm_rx_status {
 	RX_MPDU_RES_STATUS_SEC_WEP_ENC			= (1 << 8),
 	RX_MPDU_RES_STATUS_SEC_CCM_ENC			= (2 << 8),
 	RX_MPDU_RES_STATUS_SEC_TKIP_ENC			= (3 << 8),
+	RX_MPDU_RES_STATUS_SEC_EXT_ENC			= (4 << 8),
 	RX_MPDU_RES_STATUS_SEC_CCM_CMAC_ENC		= (6 << 8),
 	RX_MPDU_RES_STATUS_SEC_ENC_ERR			= (7 << 8),
 	RX_MPDU_RES_STATUS_SEC_ENC_MSK			= (7 << 8),
@@ -976,6 +1122,7 @@ struct iwl_set_calib_default_cmd {
 } __packed; /* PHY_CALIB_OVERRIDE_VALUES_S */
 
 #define MAX_PORT_ID_NUM	2
+#define MAX_MCAST_FILTERING_ADDRESSES 256
 
 /**
  * struct iwl_mcast_filter_cmd - configure multicast filter.
@@ -999,6 +1146,90 @@ struct iwl_mcast_filter_cmd {
 	u8 reserved[2];
 	u8 addr_list[0];
 } __packed; /* MCAST_FILTERING_CMD_API_S_VER_1 */
+
+#define MAX_BCAST_FILTERS 8
+#define MAX_BCAST_FILTER_ATTRS 2
+
+/**
+ * enum iwl_mvm_bcast_filter_attr_offset - written by fw for each Rx packet
+ * @BCAST_FILTER_OFFSET_PAYLOAD_START: offset is from payload start.
+ * @BCAST_FILTER_OFFSET_IP_END: offset is from ip header end (i.e.
+ *	start of ip payload).
+ */
+enum iwl_mvm_bcast_filter_attr_offset {
+	BCAST_FILTER_OFFSET_PAYLOAD_START = 0,
+	BCAST_FILTER_OFFSET_IP_END = 1,
+};
+
+/**
+ * struct iwl_fw_bcast_filter_attr - broadcast filter attribute
+ * @offset_type:	&enum iwl_mvm_bcast_filter_attr_offset.
+ * @offset:	starting offset of this pattern.
+ * @val:		value to match - big endian (MSB is the first
+ *		byte to match from offset pos).
+ * @mask:	mask to match (big endian).
+ */
+struct iwl_fw_bcast_filter_attr {
+	u8 offset_type;
+	u8 offset;
+	__le16 reserved1;
+	__be32 val;
+	__be32 mask;
+} __packed; /* BCAST_FILTER_ATT_S_VER_1 */
+
+/**
+ * enum iwl_mvm_bcast_filter_frame_type - filter frame type
+ * @BCAST_FILTER_FRAME_TYPE_ALL: consider all frames.
+ * @BCAST_FILTER_FRAME_TYPE_IPV4: consider only ipv4 frames
+ */
+enum iwl_mvm_bcast_filter_frame_type {
+	BCAST_FILTER_FRAME_TYPE_ALL = 0,
+	BCAST_FILTER_FRAME_TYPE_IPV4 = 1,
+};
+
+/**
+ * struct iwl_fw_bcast_filter - broadcast filter
+ * @discard: discard frame (1) or let it pass (0).
+ * @frame_type: &enum iwl_mvm_bcast_filter_frame_type.
+ * @num_attrs: number of valid attributes in this filter.
+ * @attrs: attributes of this filter. a filter is considered matched
+ *	only when all its attributes are matched (i.e. AND relationship)
+ */
+struct iwl_fw_bcast_filter {
+	u8 discard;
+	u8 frame_type;
+	u8 num_attrs;
+	u8 reserved1;
+	struct iwl_fw_bcast_filter_attr attrs[MAX_BCAST_FILTER_ATTRS];
+} __packed; /* BCAST_FILTER_S_VER_1 */
+
+/**
+ * struct iwl_fw_bcast_mac - per-mac broadcast filtering configuration.
+ * @default_discard: default action for this mac (discard (1) / pass (0)).
+ * @attached_filters: bitmap of relevant filters for this mac.
+ */
+struct iwl_fw_bcast_mac {
+	u8 default_discard;
+	u8 reserved1;
+	__le16 attached_filters;
+} __packed; /* BCAST_MAC_CONTEXT_S_VER_1 */
+
+/**
+ * struct iwl_bcast_filter_cmd - broadcast filtering configuration
+ * @disable: enable (0) / disable (1)
+ * @max_bcast_filters: max number of filters (MAX_BCAST_FILTERS)
+ * @max_macs: max number of macs (NUM_MAC_INDEX_DRIVER)
+ * @filters: broadcast filters
+ * @macs: broadcast filtering configuration per-mac
+ */
+struct iwl_bcast_filter_cmd {
+	u8 disable;
+	u8 max_bcast_filters;
+	u8 max_macs;
+	u8 reserved1;
+	struct iwl_fw_bcast_filter filters[MAX_BCAST_FILTERS];
+	struct iwl_fw_bcast_mac macs[NUM_MAC_INDEX_DRIVER];
+} __packed; /* BCAST_FILTERING_HCMD_API_S_VER_1 */
 
 struct mvm_statistics_dbg {
 	__le32 burst_check;
@@ -1170,7 +1401,7 @@ struct mvm_statistics_general {
 	struct mvm_statistics_general_common common;
 	__le32 beacon_filtered;
 	__le32 missed_beacons;
-	__s8 beacon_filter_everage_energy;
+	__s8 beacon_filter_average_energy;
 	__s8 beacon_filter_reason;
 	__s8 beacon_filter_current_energy;
 	__s8 beacon_filter_reserved;
@@ -1207,5 +1438,66 @@ struct iwl_notif_statistics { /* STATISTICS_NTFY_API_S_VER_8 */
 	struct mvm_statistics_tx tx;
 	struct mvm_statistics_general general;
 } __packed;
+
+/***********************************
+ * Smart Fifo API
+ ***********************************/
+/* Smart Fifo state */
+enum iwl_sf_state {
+	SF_LONG_DELAY_ON = 0, /* should never be called by driver */
+	SF_FULL_ON,
+	SF_UNINIT,
+	SF_INIT_OFF,
+	SF_HW_NUM_STATES
+};
+
+/* Smart Fifo possible scenario */
+enum iwl_sf_scenario {
+	SF_SCENARIO_SINGLE_UNICAST,
+	SF_SCENARIO_AGG_UNICAST,
+	SF_SCENARIO_MULTICAST,
+	SF_SCENARIO_BA_RESP,
+	SF_SCENARIO_TX_RESP,
+	SF_NUM_SCENARIO
+};
+
+#define SF_TRANSIENT_STATES_NUMBER 2	/* SF_LONG_DELAY_ON and SF_FULL_ON */
+#define SF_NUM_TIMEOUT_TYPES 2		/* Aging timer and Idle timer */
+
+/* smart FIFO default values */
+#define SF_W_MARK_SISO 4096
+#define SF_W_MARK_MIMO2 8192
+#define SF_W_MARK_MIMO3 6144
+#define SF_W_MARK_LEGACY 4096
+#define SF_W_MARK_SCAN 4096
+
+/* SF Scenarios timers for FULL_ON state (aligned to 32 uSec) */
+#define SF_SINGLE_UNICAST_IDLE_TIMER 320	/* 300 uSec  */
+#define SF_SINGLE_UNICAST_AGING_TIMER 2016	/* 2 mSec */
+#define SF_AGG_UNICAST_IDLE_TIMER 320		/* 300 uSec */
+#define SF_AGG_UNICAST_AGING_TIMER 2016		/* 2 mSec */
+#define SF_MCAST_IDLE_TIMER 2016		/* 2 mSec */
+#define SF_MCAST_AGING_TIMER 10016		/* 10 mSec */
+#define SF_BA_IDLE_TIMER 320			/* 300 uSec */
+#define SF_BA_AGING_TIMER 2016			/* 2 mSec */
+#define SF_TX_RE_IDLE_TIMER 320			/* 300 uSec */
+#define SF_TX_RE_AGING_TIMER 2016		/* 2 mSec */
+
+#define SF_LONG_DELAY_AGING_TIMER 1000000	/* 1 Sec */
+
+/**
+ * Smart Fifo configuration command.
+ * @state: smart fifo state, types listed in iwl_sf_sate.
+ * @watermark: Minimum allowed availabe free space in RXF for transient state.
+ * @long_delay_timeouts: aging and idle timer values for each scenario
+ * in long delay state.
+ * @full_on_timeouts: timer values for each scenario in full on state.
+ */
+struct iwl_sf_cfg_cmd {
+	enum iwl_sf_state state;
+	__le32 watermark[SF_TRANSIENT_STATES_NUMBER];
+	__le32 long_delay_timeouts[SF_NUM_SCENARIO][SF_NUM_TIMEOUT_TYPES];
+	__le32 full_on_timeouts[SF_NUM_SCENARIO][SF_NUM_TIMEOUT_TYPES];
+} __packed; /* SF_CFG_API_S_VER_2 */
 
 #endif /* __fw_api_h__ */

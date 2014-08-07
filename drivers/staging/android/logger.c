@@ -108,9 +108,10 @@ static inline struct logger_log *file_get_log(struct file *file)
 {
 	if (file->f_mode & FMODE_READ) {
 		struct logger_reader *reader = file->private_data;
+
 		return reader->log;
-	} else
-		return file->private_data;
+	}
+	return file->private_data;
 }
 
 /*
@@ -124,6 +125,7 @@ static struct logger_entry *get_entry_header(struct logger_log *log,
 		size_t off, struct logger_entry *scratch)
 {
 	size_t len = min(sizeof(struct logger_entry), log->size - off);
+
 	if (len != sizeof(struct logger_entry)) {
 		memcpy(((void *) scratch), log->buffer + off, len);
 		memcpy(((void *) scratch) + len, log->buffer,
@@ -157,8 +159,7 @@ static size_t get_user_hdr_len(int ver)
 {
 	if (ver < 2)
 		return sizeof(struct user_logger_entry_compat);
-	else
-		return sizeof(struct logger_entry);
+	return sizeof(struct logger_entry);
 }
 
 static ssize_t copy_header_to_user(int ver, struct logger_entry *entry,
@@ -469,7 +470,7 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 			 unsigned long nr_segs, loff_t ppos)
 {
 	struct logger_log *log = file_get_log(iocb->ki_filp);
-	size_t orig = log->w_off;
+	size_t orig;
 	struct logger_entry header;
 	struct timespec now;
 	ssize_t ret = 0;
@@ -481,7 +482,7 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	header.sec = now.tv_sec;
 	header.nsec = now.tv_nsec;
 	header.euid = current_euid();
-	header.len = min_t(size_t, iocb->ki_left, LOGGER_ENTRY_MAX_PAYLOAD);
+	header.len = min_t(size_t, iocb->ki_nbytes, LOGGER_ENTRY_MAX_PAYLOAD);
 	header.hdr_size = sizeof(struct logger_entry);
 
 	/* null writes succeed, return zero */
@@ -489,6 +490,8 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 		return 0;
 
 	mutex_lock(&log->mutex);
+
+	orig = log->w_off;
 
 	/*
 	 * Fix up any readers, pulling them forward to the first readable
@@ -640,6 +643,7 @@ static unsigned int logger_poll(struct file *file, poll_table *wait)
 static long logger_set_version(struct logger_reader *reader, void __user *arg)
 {
 	int version;
+
 	if (copy_from_user(&version, arg, sizeof(int)))
 		return -EFAULT;
 

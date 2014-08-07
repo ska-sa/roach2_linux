@@ -36,6 +36,7 @@
 #include <ttm/ttm_placement.h>
 #include <drm/drm_mm.h>
 #include <drm/drm_global.h>
+#include <drm/drm_vma_manager.h>
 #include <linux/workqueue.h>
 #include <linux/fs.h>
 #include <linux/spinlock.h>
@@ -519,7 +520,7 @@ struct ttm_bo_global {
  * @man: An array of mem_type_managers.
  * @fence_lock: Protects the synchronizing members on *all* bos belonging
  * to this device.
- * @addr_space_mm: Range manager for the device address space.
+ * @vma_manager: Address space manager
  * lru_lock: Spinlock that protects the buffer+device lru lists and
  * ddestroy lists.
  * @val_seq: Current validation sequence.
@@ -537,14 +538,13 @@ struct ttm_bo_device {
 	struct list_head device_list;
 	struct ttm_bo_global *glob;
 	struct ttm_bo_driver *driver;
-	rwlock_t vm_lock;
 	struct ttm_mem_type_manager man[TTM_NUM_MEM_TYPES];
 	spinlock_t fence_lock;
+
 	/*
-	 * Protected by the vm lock.
+	 * Protected by internal locks.
 	 */
-	struct rb_root addr_space_rb;
-	struct drm_mm addr_space_mm;
+	struct drm_vma_offset_manager vma_manager;
 
 	/*
 	 * Protected by the global:lru lock.
@@ -681,6 +681,15 @@ extern int ttm_tt_set_placement_caching(struct ttm_tt *ttm, uint32_t placement);
 extern int ttm_tt_swapout(struct ttm_tt *ttm,
 			  struct file *persistent_swap_storage);
 
+/**
+ * ttm_tt_unpopulate - free pages from a ttm
+ *
+ * @ttm: Pointer to the ttm_tt structure
+ *
+ * Calls the driver method to free all pages from a ttm
+ */
+extern void ttm_tt_unpopulate(struct ttm_tt *ttm);
+
 /*
  * ttm_bo.c
  */
@@ -738,6 +747,7 @@ extern int ttm_bo_device_release(struct ttm_bo_device *bdev);
  * @bdev: A pointer to a struct ttm_bo_device to initialize.
  * @glob: A pointer to an initialized struct ttm_bo_global.
  * @driver: A pointer to a struct ttm_bo_driver set up by the caller.
+ * @mapping: The address space to use for this bo.
  * @file_page_offset: Offset into the device address space that is available
  * for buffer data. This ensures compatibility with other users of the
  * address space.
@@ -749,6 +759,7 @@ extern int ttm_bo_device_release(struct ttm_bo_device *bdev);
 extern int ttm_bo_device_init(struct ttm_bo_device *bdev,
 			      struct ttm_bo_global *glob,
 			      struct ttm_bo_driver *driver,
+			      struct address_space *mapping,
 			      uint64_t file_page_offset, bool need_dma32);
 
 /**
@@ -777,7 +788,7 @@ extern void ttm_bo_del_sub_from_lru(struct ttm_buffer_object *bo);
 extern void ttm_bo_add_to_lru(struct ttm_buffer_object *bo);
 
 /**
- * ttm_bo_reserve_nolru:
+ * __ttm_bo_reserve:
  *
  * @bo: A pointer to a struct ttm_buffer_object.
  * @interruptible: Sleep interruptible if waiting.
@@ -798,10 +809,10 @@ extern void ttm_bo_add_to_lru(struct ttm_buffer_object *bo);
  * -EALREADY: Bo already reserved using @ticket. This error code will only
  * be returned if @use_ticket is set to true.
  */
-static inline int ttm_bo_reserve_nolru(struct ttm_buffer_object *bo,
-				       bool interruptible,
-				       bool no_wait, bool use_ticket,
-				       struct ww_acquire_ctx *ticket)
+static inline int __ttm_bo_reserve(struct ttm_buffer_object *bo,
+				   bool interruptible,
+				   bool no_wait, bool use_ticket,
+				   struct ww_acquire_ctx *ticket)
 {
 	int ret = 0;
 
@@ -877,8 +888,7 @@ static inline int ttm_bo_reserve(struct ttm_buffer_object *bo,
 
 	WARN_ON(!atomic_read(&bo->kref.refcount));
 
-	ret = ttm_bo_reserve_nolru(bo, interruptible, no_wait, use_ticket,
-				    ticket);
+	ret = __ttm_bo_reserve(bo, interruptible, no_wait, use_ticket, ticket);
 	if (likely(ret == 0))
 		ttm_bo_del_sub_from_lru(bo);
 
@@ -918,20 +928,14 @@ static inline int ttm_bo_reserve_slowpath(struct ttm_buffer_object *bo,
 }
 
 /**
- * ttm_bo_unreserve_ticket
+ * __ttm_bo_unreserve
  * @bo: A pointer to a struct ttm_buffer_object.
- * @ticket: ww_acquire_ctx used for reserving
  *
- * Unreserve a previous reservation of @bo made with @ticket.
+ * Unreserve a previous reservation of @bo where the buffer object is
+ * already on lru lists.
  */
-static inline void ttm_bo_unreserve_ticket(struct ttm_buffer_object *bo,
-					   struct ww_acquire_ctx *t)
+static inline void __ttm_bo_unreserve(struct ttm_buffer_object *bo)
 {
-	if (!(bo->mem.placement & TTM_PL_FLAG_NO_EVICT)) {
-		spin_lock(&bo->glob->lru_lock);
-		ttm_bo_add_to_lru(bo);
-		spin_unlock(&bo->glob->lru_lock);
-	}
 	ww_mutex_unlock(&bo->resv->lock);
 }
 
@@ -944,7 +948,25 @@ static inline void ttm_bo_unreserve_ticket(struct ttm_buffer_object *bo,
  */
 static inline void ttm_bo_unreserve(struct ttm_buffer_object *bo)
 {
-	ttm_bo_unreserve_ticket(bo, NULL);
+	if (!(bo->mem.placement & TTM_PL_FLAG_NO_EVICT)) {
+		spin_lock(&bo->glob->lru_lock);
+		ttm_bo_add_to_lru(bo);
+		spin_unlock(&bo->glob->lru_lock);
+	}
+	__ttm_bo_unreserve(bo);
+}
+
+/**
+ * ttm_bo_unreserve_ticket
+ * @bo: A pointer to a struct ttm_buffer_object.
+ * @ticket: ww_acquire_ctx used for reserving
+ *
+ * Unreserve a previous reservation of @bo made with @ticket.
+ */
+static inline void ttm_bo_unreserve_ticket(struct ttm_buffer_object *bo,
+					   struct ww_acquire_ctx *t)
+{
+	ttm_bo_unreserve(bo);
 }
 
 /*

@@ -28,6 +28,7 @@
 
 static DEFINE_MUTEX(ac97_mutex);
 struct nuc900_audio *nuc900_ac97_data;
+EXPORT_SYMBOL_GPL(nuc900_ac97_data);
 
 static int nuc900_checkready(void)
 {
@@ -333,9 +334,6 @@ static int nuc900_ac97_drvprobe(struct platform_device *pdev)
 	spin_lock_init(&nuc900_audio->lock);
 
 	nuc900_audio->res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!nuc900_audio->res)
-		return ret;
-
 	nuc900_audio->mmio = devm_ioremap_resource(&pdev->dev,
 						   nuc900_audio->res);
 	if (IS_ERR(nuc900_audio->mmio))

@@ -542,7 +542,7 @@ static const struct net_device_ops w5300_netdev_ops = {
 
 static int w5300_hw_probe(struct platform_device *pdev)
 {
-	struct wiznet_platform_data *data = pdev->dev.platform_data;
+	struct wiznet_platform_data *data = dev_get_platdata(&pdev->dev);
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct w5300_priv *priv = netdev_priv(ndev);
 	const char *name = netdev_name(ndev);
@@ -561,11 +561,10 @@ static int w5300_hw_probe(struct platform_device *pdev)
 	if (!mem)
 		return -ENXIO;
 	mem_size = resource_size(mem);
-	if (!devm_request_mem_region(&pdev->dev, mem->start, mem_size, name))
-		return -EBUSY;
-	priv->base = devm_ioremap(&pdev->dev, mem->start, mem_size);
-	if (!priv->base)
-		return -EBUSY;
+
+	priv->base = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(priv->base))
+		return PTR_ERR(priv->base);
 
 	spin_lock_init(&priv->reg_lock);
 	priv->indirect = mem_size < W5300_BUS_DIRECT_SIZE;

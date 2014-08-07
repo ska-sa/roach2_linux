@@ -32,6 +32,10 @@
 				};
 			};
 
+			ssc0: ssc@f0008000 {
+				atmel,clk-from-rk-pin;
+			};
+
 			/*
 			 * i2c0 conflicts with ISI:
 			 * disable it to allow the use of ISI
@@ -81,6 +85,14 @@
 
 			macb1: ethernet@f802c000 {
 				phy-mode = "rmii";
+
+				#address-cells = <1>;
+				#size-cells = <0>;
+				phy0: ethernet-phy@1 {
+					interrupt-parent = <&pioE>;
+					interrupts = <30 IRQ_TYPE_EDGE_FALLING>;
+					reg = <1>;
+				};
 			};
 
 			pinctrl@fffff200 {
@@ -148,7 +160,7 @@
 	};
 
 	sound {
-		compatible = "atmel,sama5d3ek-wm8904";
+		compatible = "atmel,asoc-wm8904";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_pck0_as_audio_mck>;
 
@@ -158,9 +170,12 @@
 			"Headphone Jack", "HPOUTR",
 			"IN2L", "Line In Jack",
 			"IN2R", "Line In Jack",
+			"MICBIAS", "IN1L",
 			"IN1L", "Mic";
 
 		atmel,ssc-controller = <&ssc0>;
 		atmel,audio-codec = <&wm8904>;
+
+		status = "disabled";
 	};
 };

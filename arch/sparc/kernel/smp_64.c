@@ -25,6 +25,7 @@
 #include <linux/ftrace.h>
 #include <linux/cpu.h>
 #include <linux/slab.h>
+#include <linux/kgdb.h>
 
 #include <asm/head.h>
 #include <asm/ptrace.h>
@@ -35,6 +36,7 @@
 #include <asm/hvtramp.h>
 #include <asm/io.h>
 #include <asm/timer.h>
+#include <asm/setup.h>
 
 #include <asm/irq.h>
 #include <asm/irq_regs.h>
@@ -52,8 +54,7 @@
 #include <asm/pcr.h>
 
 #include "cpumap.h"
-
-int sparc64_multi_core __read_mostly;
+#include "kernel.h"
 
 DEFINE_PER_CPU(cpumask_t, cpu_sibling_map) = CPU_MASK_NONE;
 cpumask_t cpu_core_map[NR_CPUS] __read_mostly =
@@ -87,7 +88,7 @@ extern void setup_sparc64_timer(void);
 
 static volatile unsigned long callin_flag = 0;
 
-void __cpuinit smp_callin(void)
+void smp_callin(void)
 {
 	int cpuid = hard_smp_processor_id();
 
@@ -123,10 +124,11 @@ void __cpuinit smp_callin(void)
 		rmb();
 
 	set_cpu_online(cpuid, true);
-	local_irq_enable();
 
 	/* idle thread is expected to have preempt disabled */
 	preempt_disable();
+
+	local_irq_enable();
 
 	cpu_startup_entry(CPUHP_ONLINE);
 }
@@ -150,7 +152,7 @@ void cpu_panic(void)
 #define NUM_ROUNDS	64	/* magic value */
 #define NUM_ITERS	5	/* likewise */
 
-static DEFINE_SPINLOCK(itc_sync_lock);
+static DEFINE_RAW_SPINLOCK(itc_sync_lock);
 static unsigned long go[SLAVE + 1];
 
 #define DEBUG_TICK_SYNC	0
@@ -258,7 +260,7 @@ static void smp_synchronize_one_tick(int cpu)
 	go[MASTER] = 0;
 	membar_safe("#StoreLoad");
 
-	spin_lock_irqsave(&itc_sync_lock, flags);
+	raw_spin_lock_irqsave(&itc_sync_lock, flags);
 	{
 		for (i = 0; i < NUM_ROUNDS*NUM_ITERS; i++) {
 			while (!go[MASTER])
@@ -269,19 +271,12 @@ static void smp_synchronize_one_tick(int cpu)
 			membar_safe("#StoreLoad");
 		}
 	}
-	spin_unlock_irqrestore(&itc_sync_lock, flags);
+	raw_spin_unlock_irqrestore(&itc_sync_lock, flags);
 }
 
 #if defined(CONFIG_SUN_LDOMS) && defined(CONFIG_HOTPLUG_CPU)
-/* XXX Put this in some common place. XXX */
-static unsigned long kimage_addr_to_ra(void *p)
-{
-	unsigned long val = (unsigned long) p;
-
-	return kern_base + (val - KERNBASE);
-}
-
-static void __cpuinit ldom_startcpu_cpuid(unsigned int cpu, unsigned long thread_reg, void **descrp)
+static void ldom_startcpu_cpuid(unsigned int cpu, unsigned long thread_reg,
+				void **descrp)
 {
 	extern unsigned long sparc64_ttable_tl0;
 	extern unsigned long kern_locked_tte_data;
@@ -342,7 +337,7 @@ extern unsigned long sparc64_cpu_startup;
  */
 static struct thread_info *cpu_new_thread = NULL;
 
-static int __cpuinit smp_boot_one_cpu(unsigned int cpu, struct task_struct *idle)
+static int smp_boot_one_cpu(unsigned int cpu, struct task_struct *idle)
 {
 	unsigned long entry =
 		(unsigned long)(&sparc64_cpu_startup);
@@ -867,11 +862,6 @@ extern unsigned long xcall_flush_dcache_page_cheetah;
 #endif
 extern unsigned long xcall_flush_dcache_page_spitfire;
 
-#ifdef CONFIG_DEBUG_DCFLUSH
-extern atomic_t dcpage_flushes;
-extern atomic_t dcpage_flushes_xcall;
-#endif
-
 static inline void __local_flush_dcache_page(struct page *page)
 {
 #ifdef DCACHE_ALIASING_POSSIBLE
@@ -1266,7 +1256,7 @@ void smp_fill_in_sib_core_maps(void)
 	}
 }
 
-int __cpuinit __cpu_up(unsigned int cpu, struct task_struct *tidle)
+int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 {
 	int ret = smp_boot_one_cpu(cpu, tidle);
 
@@ -1398,8 +1388,13 @@ void __init smp_cpus_done(unsigned int max_cpus)
 
 void smp_send_reschedule(int cpu)
 {
-	xcall_deliver((u64) &xcall_receive_signal, 0, 0,
-		      cpumask_of(cpu));
+	if (cpu == smp_processor_id()) {
+		WARN_ON_ONCE(preemptible());
+		set_softint(1 << PIL_SMP_RECEIVE_SIGNAL);
+	} else {
+		xcall_deliver((u64) &xcall_receive_signal,
+			      0, 0, cpumask_of(cpu));
+	}
 }
 
 void __irq_entry smp_receive_signal_client(int irq, struct pt_regs *regs)

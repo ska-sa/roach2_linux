@@ -128,11 +128,28 @@
 #define		READ_PROTECTION_FAULT_ENABLE_DEFAULT		(1 << 16)
 #define		WRITE_PROTECTION_FAULT_ENABLE_INTERRUPT		(1 << 18)
 #define		WRITE_PROTECTION_FAULT_ENABLE_DEFAULT		(1 << 19)
+#define		PAGE_TABLE_BLOCK_SIZE(x)			(((x) & 0xF) << 24)
 #define VM_CONTEXT1_CNTL				0x1414
 #define VM_CONTEXT0_CNTL2				0x1430
 #define VM_CONTEXT1_CNTL2				0x1434
 #define VM_INVALIDATE_REQUEST				0x1478
 #define VM_INVALIDATE_RESPONSE				0x147c
+#define	VM_CONTEXT1_PROTECTION_FAULT_ADDR		0x14FC
+#define	VM_CONTEXT1_PROTECTION_FAULT_STATUS		0x14DC
+#define		PROTECTIONS_MASK			(0xf << 0)
+#define		PROTECTIONS_SHIFT			0
+		/* bit 0: range
+		 * bit 2: pde0
+		 * bit 3: valid
+		 * bit 4: read
+		 * bit 5: write
+		 */
+#define		MEMORY_CLIENT_ID_MASK			(0xff << 12)
+#define		MEMORY_CLIENT_ID_SHIFT			12
+#define		MEMORY_CLIENT_RW_MASK			(1 << 24)
+#define		MEMORY_CLIENT_RW_SHIFT			24
+#define		FAULT_VMID_MASK				(0x7 << 25)
+#define		FAULT_VMID_SHIFT			25
 #define VM_CONTEXT0_PROTECTION_FAULT_DEFAULT_ADDR	0x1518
 #define VM_CONTEXT1_PROTECTION_FAULT_DEFAULT_ADDR	0x151c
 #define	VM_CONTEXT0_PAGE_TABLE_BASE_ADDR		0x153C
@@ -1138,6 +1155,7 @@
 #              define PACKET3_DB_ACTION_ENA        (1 << 26)
 #              define PACKET3_SH_ACTION_ENA        (1 << 27)
 #              define PACKET3_SX_ACTION_ENA        (1 << 28)
+#              define PACKET3_ENGINE_ME            (1 << 31)
 #define	PACKET3_ME_INITIALIZE				0x44
 #define		PACKET3_ME_INITIALIZE_DEVICE_ID(x) ((x) << 16)
 #define	PACKET3_COND_WRITE				0x45

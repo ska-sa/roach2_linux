@@ -251,8 +251,6 @@ static int arizona_apply_hardware_patch(struct arizona* arizona)
 	unsigned int fll, sysclk;
 	int ret, err;
 
-	regcache_cache_bypass(arizona->regmap, true);
-
 	/* Cache existing FLL and SYSCLK settings */
 	ret = regmap_read(arizona->regmap, ARIZONA_FLL1_CONTROL_1, &fll);
 	if (ret != 0) {
@@ -321,8 +319,6 @@ err_fll:
 			"Failed to re-apply old FLL settings: %d\n",
 			err);
 	}
-
-	regcache_cache_bypass(arizona->regmap, false);
 
 	if (ret != 0)
 		return ret;
@@ -438,9 +434,9 @@ static int arizona_runtime_suspend(struct device *dev)
 		}
 	}
 
-	regulator_disable(arizona->dcvdd);
 	regcache_cache_only(arizona->regmap, true);
 	regcache_mark_dirty(arizona->regmap);
+	regulator_disable(arizona->dcvdd);
 
 	return 0;
 }
@@ -512,19 +508,31 @@ int arizona_of_get_type(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(arizona_of_get_type);
 
+int arizona_of_get_named_gpio(struct arizona *arizona, const char *prop,
+			      bool mandatory)
+{
+	int gpio;
+
+	gpio = of_get_named_gpio(arizona->dev->of_node, prop, 0);
+	if (gpio < 0) {
+		if (mandatory)
+			dev_err(arizona->dev,
+				"Mandatory DT gpio %s missing/malformed: %d\n",
+				prop, gpio);
+
+		gpio = 0;
+	}
+
+	return gpio;
+}
+EXPORT_SYMBOL_GPL(arizona_of_get_named_gpio);
+
 static int arizona_of_get_core_pdata(struct arizona *arizona)
 {
+	struct arizona_pdata *pdata = &arizona->pdata;
 	int ret, i;
 
-	arizona->pdata.reset = of_get_named_gpio(arizona->dev->of_node,
-						 "wlf,reset", 0);
-	if (arizona->pdata.reset < 0)
-		arizona->pdata.reset = 0;
-
-	arizona->pdata.ldoena = of_get_named_gpio(arizona->dev->of_node,
-						  "wlf,ldoena", 0);
-	if (arizona->pdata.ldoena < 0)
-		arizona->pdata.ldoena = 0;
+	pdata->reset = arizona_of_get_named_gpio(arizona, "wlf,reset", true);
 
 	ret = of_property_read_u32_array(arizona->dev->of_node,
 					 "wlf,gpio-defaults",
@@ -540,7 +548,7 @@ static int arizona_of_get_core_pdata(struct arizona *arizona)
 		for (i = 0; i < ARRAY_SIZE(arizona->pdata.gpio_defaults); i++) {
 			if (arizona->pdata.gpio_defaults[i] > 0xffff)
 				arizona->pdata.gpio_defaults[i] = 0;
-			if (arizona->pdata.gpio_defaults[i] == 0)
+			else if (arizona->pdata.gpio_defaults[i] == 0)
 				arizona->pdata.gpio_defaults[i] = 0x10000;
 		}
 	} else {
@@ -554,6 +562,7 @@ static int arizona_of_get_core_pdata(struct arizona *arizona)
 const struct of_device_id arizona_of_match[] = {
 	{ .compatible = "wlf,wm5102", .data = (void *)WM5102 },
 	{ .compatible = "wlf,wm5110", .data = (void *)WM5110 },
+	{ .compatible = "wlf,wm8997", .data = (void *)WM8997 },
 	{},
 };
 EXPORT_SYMBOL_GPL(arizona_of_match);
@@ -564,26 +573,62 @@ static inline int arizona_of_get_core_pdata(struct arizona *arizona)
 }
 #endif
 
-static struct mfd_cell early_devs[] = {
+static const struct mfd_cell early_devs[] = {
 	{ .name = "arizona-ldo1" },
 };
 
-static struct mfd_cell wm5102_devs[] = {
-	{ .name = "arizona-micsupp" },
-	{ .name = "arizona-extcon" },
-	{ .name = "arizona-gpio" },
-	{ .name = "arizona-haptics" },
-	{ .name = "arizona-pwm" },
-	{ .name = "wm5102-codec" },
+static const char *wm5102_supplies[] = {
+	"DBVDD2",
+	"DBVDD3",
+	"CPVDD",
+	"SPKVDDL",
+	"SPKVDDR",
+	"MICVDD",
 };
 
-static struct mfd_cell wm5110_devs[] = {
+static const struct mfd_cell wm5102_devs[] = {
 	{ .name = "arizona-micsupp" },
 	{ .name = "arizona-extcon" },
 	{ .name = "arizona-gpio" },
 	{ .name = "arizona-haptics" },
 	{ .name = "arizona-pwm" },
-	{ .name = "wm5110-codec" },
+	{
+		.name = "wm5102-codec",
+		.parent_supplies = wm5102_supplies,
+		.num_parent_supplies = ARRAY_SIZE(wm5102_supplies),
+	},
+};
+
+static const struct mfd_cell wm5110_devs[] = {
+	{ .name = "arizona-micsupp" },
+	{ .name = "arizona-extcon" },
+	{ .name = "arizona-gpio" },
+	{ .name = "arizona-haptics" },
+	{ .name = "arizona-pwm" },
+	{
+		.name = "wm5110-codec",
+		.parent_supplies = wm5102_supplies,
+		.num_parent_supplies = ARRAY_SIZE(wm5102_supplies),
+	},
+};
+
+static const char *wm8997_supplies[] = {
+	"DBVDD2",
+	"CPVDD",
+	"SPKVDD",
+};
+
+static const struct mfd_cell wm8997_devs[] = {
+	{ .name = "arizona-micsupp" },
+	{ .name = "arizona-extcon" },
+	{ .name = "arizona-gpio" },
+	{ .name = "arizona-haptics" },
+	{ .name = "arizona-pwm" },
+	{
+		.name = "wm8997-codec",
+		.parent_supplies = wm8997_supplies,
+		.num_parent_supplies = ARRAY_SIZE(wm8997_supplies),
+	},
 };
 
 int arizona_dev_init(struct arizona *arizona)
@@ -597,17 +642,18 @@ int arizona_dev_init(struct arizona *arizona)
 	dev_set_drvdata(arizona->dev, arizona);
 	mutex_init(&arizona->clk_lock);
 
-	arizona_of_get_core_pdata(arizona);
-
 	if (dev_get_platdata(arizona->dev))
 		memcpy(&arizona->pdata, dev_get_platdata(arizona->dev),
 		       sizeof(arizona->pdata));
+	else
+		arizona_of_get_core_pdata(arizona);
 
 	regcache_cache_only(arizona->regmap, true);
 
 	switch (arizona->type) {
 	case WM5102:
 	case WM5110:
+	case WM8997:
 		for (i = 0; i < ARRAY_SIZE(wm5102_core_supplies); i++)
 			arizona->core_supplies[i].supply
 				= wm5102_core_supplies[i];
@@ -618,6 +664,9 @@ int arizona_dev_init(struct arizona *arizona)
 			arizona->type);
 		return -EINVAL;
 	}
+
+	/* Mark DCVDD as external, LDO1 driver will clear if internal */
+	arizona->external_dcvdd = true;
 
 	ret = mfd_add_devices(arizona->dev, -1, early_devs,
 			      ARRAY_SIZE(early_devs), NULL, 0, NULL);
@@ -683,6 +732,7 @@ int arizona_dev_init(struct arizona *arizona)
 	switch (reg) {
 	case 0x5102:
 	case 0x5110:
+	case 0x8997:
 		break;
 	default:
 		dev_err(arizona->dev, "Unknown device ID: %x\n", reg);
@@ -768,6 +818,17 @@ int arizona_dev_init(struct arizona *arizona)
 		apply_patch = wm5110_patch;
 		break;
 #endif
+#ifdef CONFIG_MFD_WM8997
+	case 0x8997:
+		type_name = "WM8997";
+		if (arizona->type != WM8997) {
+			dev_err(arizona->dev, "WM8997 registered as %d\n",
+				arizona->type);
+			arizona->type = WM8997;
+		}
+		apply_patch = wm8997_patch;
+		break;
+#endif
 	default:
 		dev_err(arizona->dev, "Unknown device ID %x\n", reg);
 		goto err_reset;
@@ -805,14 +866,6 @@ int arizona_dev_init(struct arizona *arizona)
 		regmap_write(arizona->regmap, ARIZONA_GPIO1_CTRL + i,
 			     arizona->pdata.gpio_defaults[i]);
 	}
-
-	/*
-	 * LDO1 can only be used to supply DCVDD so if it has no
-	 * consumers then DCVDD is supplied externally.
-	 */
-	if (arizona->pdata.ldo1 &&
-	    arizona->pdata.ldo1->num_consumer_supplies == 0)
-		arizona->external_dcvdd = true;
 
 	pm_runtime_set_autosuspend_delay(arizona->dev, 100);
 	pm_runtime_use_autosuspend(arizona->dev);
@@ -933,6 +986,10 @@ int arizona_dev_init(struct arizona *arizona)
 	case WM5110:
 		ret = mfd_add_devices(arizona->dev, -1, wm5110_devs,
 				      ARRAY_SIZE(wm5110_devs), NULL, 0, NULL);
+		break;
+	case WM8997:
+		ret = mfd_add_devices(arizona->dev, -1, wm8997_devs,
+				      ARRAY_SIZE(wm8997_devs), NULL, 0, NULL);
 		break;
 	}
 

@@ -46,6 +46,8 @@
 #include <linux/usb.h>
 #include <linux/usb/otg.h>
 #include <linux/usb/musb.h>
+#include <linux/phy/phy.h>
+#include <linux/workqueue.h>
 
 struct musb;
 struct musb_hw_ep;
@@ -82,11 +84,6 @@ enum {
 	MUSB_PORT_MODE_GADGET,
 	MUSB_PORT_MODE_DUAL_ROLE,
 };
-
-#ifdef CONFIG_PROC_FS
-#include <linux/fs.h>
-#define MUSB_CONFIG_PROC_FS
-#endif
 
 /****************************** CONSTANTS ********************************/
 
@@ -195,6 +192,7 @@ struct musb_platform_ops {
 
 	int	(*set_mode)(struct musb *musb, u8 mode);
 	void	(*try_idle)(struct musb *musb, unsigned long timeout);
+	int	(*reset)(struct musb *musb);
 
 	int	(*vbus_status)(struct musb *musb);
 	void	(*set_vbus)(struct musb *musb, int on);
@@ -299,6 +297,9 @@ struct musb {
 
 	irqreturn_t		(*isr)(int, void *);
 	struct work_struct	irq_work;
+	struct delayed_work	recover_work;
+	struct delayed_work	deassert_reset_work;
+	struct delayed_work	finish_resume_work;
 	u16			hwvers;
 
 	u16			intrrxe;
@@ -338,6 +339,7 @@ struct musb {
 	dma_addr_t		async;
 	dma_addr_t		sync;
 	void __iomem		*sync_va;
+	u8			tusb_revision;
 #endif
 
 	/* passed down from chip/board specific irq handlers */
@@ -346,6 +348,7 @@ struct musb {
 	u16			int_tx;
 
 	struct usb_phy		*xceiv;
+	struct phy		*phy;
 
 	int nIrq;
 	unsigned		irq_wake:1;
@@ -425,9 +428,6 @@ struct musb {
 
 	struct musb_hdrc_config	*config;
 
-#ifdef MUSB_CONFIG_PROC_FS
-	struct proc_dir_entry *proc_entry;
-#endif
 	int			xceiv_old_state;
 #ifdef CONFIG_DEBUG_FS
 	struct dentry		*debugfs_root;
@@ -511,6 +511,7 @@ static inline void musb_configure_ep0(struct musb *musb)
 extern const char musb_driver_name[];
 
 extern void musb_stop(struct musb *musb);
+extern void musb_start(struct musb *musb);
 
 extern void musb_write_fifo(struct musb_hw_ep *ep, u16 len, const u8 *src);
 extern void musb_read_fifo(struct musb_hw_ep *ep, u16 len, u8 *dst);
@@ -552,6 +553,14 @@ static inline void musb_platform_try_idle(struct musb *musb,
 {
 	if (musb->ops->try_idle)
 		musb->ops->try_idle(musb, timeout);
+}
+
+static inline int  musb_platform_reset(struct musb *musb)
+{
+	if (!musb->ops->reset)
+		return -EINVAL;
+
+	return musb->ops->reset(musb);
 }
 
 static inline int musb_platform_get_vbus_status(struct musb *musb)

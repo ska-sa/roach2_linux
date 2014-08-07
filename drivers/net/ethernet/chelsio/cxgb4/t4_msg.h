@@ -116,6 +116,7 @@ enum CPL_error {
 	CPL_ERR_KEEPALIVE_TIMEDOUT = 34,
 	CPL_ERR_RTX_NEG_ADVICE     = 35,
 	CPL_ERR_PERSIST_NEG_ADVICE = 36,
+	CPL_ERR_KEEPALV_NEG_ADVICE = 37,
 	CPL_ERR_ABORT_FAILED       = 42,
 	CPL_ERR_IWARP_FLM          = 50,
 };
@@ -226,6 +227,7 @@ struct cpl_pass_open_req {
 #define DELACK(x)     ((x) << 5)
 #define ULP_MODE(x)   ((x) << 8)
 #define RCV_BUFSIZ(x) ((x) << 12)
+#define RCV_BUFSIZ_MASK 0x3FFU
 #define DSCP(x)       ((x) << 22)
 #define SMAC_SEL(x)   ((u64)(x) << 28)
 #define L2T_IDX(x)    ((u64)(x) << 36)
@@ -277,6 +279,15 @@ struct cpl_pass_accept_rpl {
 	__be64 opt0;
 };
 
+struct cpl_t5_pass_accept_rpl {
+	WR_HDR;
+	union opcode_tid ot;
+	__be32 opt2;
+	__be64 opt0;
+	__be32 iss;
+	__be32 rsvd;
+};
+
 struct cpl_act_open_req {
 	WR_HDR;
 	union opcode_tid ot;
@@ -318,6 +329,21 @@ struct cpl_act_open_req6 {
 	__be64 opt0;
 	__be32 params;
 	__be32 opt2;
+};
+
+struct cpl_t5_act_open_req6 {
+	WR_HDR;
+	union opcode_tid ot;
+	__be16 local_port;
+	__be16 peer_port;
+	__be64 local_ip_hi;
+	__be64 local_ip_lo;
+	__be64 peer_ip_hi;
+	__be64 peer_ip_lo;
+	__be64 opt0;
+	__be32 rsvd;
+	__be32 opt2;
+	__be64 params;
 };
 
 struct cpl_act_open_rpl {
@@ -405,7 +431,7 @@ struct cpl_close_listsvr_req {
 	WR_HDR;
 	union opcode_tid ot;
 	__be16 reply_ctrl;
-#define LISTSVR_IPV6 (1 << 14)
+#define LISTSVR_IPV6(x) ((x) << 14)
 	__be16 rsvd;
 };
 

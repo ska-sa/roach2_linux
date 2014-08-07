@@ -46,15 +46,15 @@
 #endif
 
 
-#include <obd.h>
-#include <obd_class.h>
+#include "../obd.h"
+#include "../obd_class.h"
 
 typedef void (*fsfilt_cb_t)(struct obd_device *obd, __u64 last_rcvd,
 			    void *data, int error);
 
 struct fsfilt_operations {
 	struct list_head fs_list;
-	module_t *fs_owner;
+	struct module *fs_owner;
 	char   *fs_type;
 	char   *(* fs_getlabel)(struct super_block *sb);
 	void   *(* fs_start)(struct inode *inode, int op, void *desc_private,
@@ -90,12 +90,12 @@ static inline char *fsfilt_get_label(struct obd_device *obd,
 
 #define __fsfilt_check_slow(obd, start, msg)			      \
 do {								      \
-	if (cfs_time_before(jiffies, start + 15 * HZ))		\
+	if (time_before(jiffies, start + 15 * HZ))		\
 		break;						    \
-	else if (cfs_time_before(jiffies, start + 30 * HZ))	   \
+	else if (time_before(jiffies, start + 30 * HZ))	   \
 		CDEBUG(D_VFSTRACE, "%s: slow %s %lus\n", obd->obd_name,   \
 		       msg, (jiffies-start) / HZ);		    \
-	else if (cfs_time_before(jiffies, start + DISK_TIMEOUT * HZ)) \
+	else if (time_before(jiffies, start + DISK_TIMEOUT * HZ)) \
 		CWARN("%s: slow %s %lus\n", obd->obd_name, msg,	   \
 		      (jiffies - start) / HZ);			\
 	else							      \
@@ -143,16 +143,6 @@ static inline int fsfilt_commit(struct obd_device *obd, struct inode *inode,
 	fsfilt_check_slow(obd, now, "journal start");
 
 	return rc;
-}
-
-static inline int fsfilt_map_inode_pages(struct obd_device *obd,
-					 struct inode *inode,
-					 struct page **page, int pages,
-					 unsigned long *blocks,
-					 int create, struct mutex *mutex)
-{
-	return obd->obd_fsops->fs_map_inode_pages(inode, page, pages, blocks,
-						  create, mutex);
 }
 
 static inline int fsfilt_read_record(struct obd_device *obd, struct file *file,

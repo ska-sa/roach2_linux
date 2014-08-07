@@ -48,6 +48,7 @@
 #include <linux/highmem.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
+#include <linux/pagemap.h>
 
 #include <net/protocol.h>
 #include <linux/skbuff.h>
@@ -56,7 +57,7 @@
 #include <net/sock.h>
 #include <net/tcp_states.h>
 #include <trace/events/skb.h>
-#include <net/ll_poll.h>
+#include <net/busy_poll.h>
 
 /*
  *	Is a socket 'connection oriented' ?
@@ -573,6 +574,77 @@ fault:
 }
 EXPORT_SYMBOL(skb_copy_datagram_from_iovec);
 
+/**
+ *	zerocopy_sg_from_iovec - Build a zerocopy datagram from an iovec
+ *	@skb: buffer to copy
+ *	@from: io vector to copy from
+ *	@offset: offset in the io vector to start copying from
+ *	@count: amount of vectors to copy to buffer from
+ *
+ *	The function will first copy up to headlen, and then pin the userspace
+ *	pages and build frags through them.
+ *
+ *	Returns 0, -EFAULT or -EMSGSIZE.
+ *	Note: the iovec is not modified during the copy
+ */
+int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
+				  int offset, size_t count)
+{
+	int len = iov_length(from, count) - offset;
+	int copy = min_t(int, skb_headlen(skb), len);
+	int size;
+	int i = 0;
+
+	/* copy up to skb headlen */
+	if (skb_copy_datagram_from_iovec(skb, 0, from, offset, copy))
+		return -EFAULT;
+
+	if (len == copy)
+		return 0;
+
+	offset += copy;
+	while (count--) {
+		struct page *page[MAX_SKB_FRAGS];
+		int num_pages;
+		unsigned long base;
+		unsigned long truesize;
+
+		/* Skip over from offset and copied */
+		if (offset >= from->iov_len) {
+			offset -= from->iov_len;
+			++from;
+			continue;
+		}
+		len = from->iov_len - offset;
+		base = (unsigned long)from->iov_base + offset;
+		size = ((base & ~PAGE_MASK) + len + ~PAGE_MASK) >> PAGE_SHIFT;
+		if (i + size > MAX_SKB_FRAGS)
+			return -EMSGSIZE;
+		num_pages = get_user_pages_fast(base, size, 0, &page[i]);
+		if (num_pages != size) {
+			release_pages(&page[i], num_pages, 0);
+			return -EFAULT;
+		}
+		truesize = size * PAGE_SIZE;
+		skb->data_len += len;
+		skb->len += len;
+		skb->truesize += truesize;
+		atomic_add(truesize, &skb->sk->sk_wmem_alloc);
+		while (len) {
+			int off = base & ~PAGE_MASK;
+			int size = min_t(int, len, PAGE_SIZE - off);
+			skb_fill_page_desc(skb, i, page[i], off, size);
+			base += size;
+			len -= size;
+			i++;
+		}
+		offset = 0;
+		++from;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(zerocopy_sg_from_iovec);
+
 static int skb_copy_and_csum_datagram(const struct sk_buff *skb, int offset,
 				      u8 __user *to, int len,
 				      __wsum *csump)
@@ -668,17 +740,37 @@ __sum16 __skb_checksum_complete_head(struct sk_buff *skb, int len)
 
 	sum = csum_fold(skb_checksum(skb, 0, len, skb->csum));
 	if (likely(!sum)) {
-		if (unlikely(skb->ip_summed == CHECKSUM_COMPLETE))
+		if (unlikely(skb->ip_summed == CHECKSUM_COMPLETE) &&
+		    !skb->csum_complete_sw)
 			netdev_rx_csum_fault(skb->dev);
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	}
+	skb->csum_valid = !sum;
 	return sum;
 }
 EXPORT_SYMBOL(__skb_checksum_complete_head);
 
 __sum16 __skb_checksum_complete(struct sk_buff *skb)
 {
-	return __skb_checksum_complete_head(skb, skb->len);
+	__wsum csum;
+	__sum16 sum;
+
+	csum = skb_checksum(skb, 0, skb->len, 0);
+
+	/* skb->csum holds pseudo checksum */
+	sum = csum_fold(csum_add(skb->csum, csum));
+	if (likely(!sum)) {
+		if (unlikely(skb->ip_summed == CHECKSUM_COMPLETE) &&
+		    !skb->csum_complete_sw)
+			netdev_rx_csum_fault(skb->dev);
+	}
+
+	/* Save full packet checksum */
+	skb->csum = csum;
+	skb->ip_summed = CHECKSUM_COMPLETE;
+	skb->csum_complete_sw = 1;
+	skb->csum_valid = !sum;
+
+	return sum;
 }
 EXPORT_SYMBOL(__skb_checksum_complete);
 
