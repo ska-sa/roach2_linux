@@ -42,6 +42,7 @@ Module.symvers
 /TAGS
 /linux
 /vmlinux
+/vmlinux.strip
 /vmlinuz
 /System.map
 /Module.markers
