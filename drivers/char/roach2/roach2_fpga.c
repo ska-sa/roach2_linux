@@ -33,7 +33,7 @@
 #include <linux/io.h>
 #include <linux/gpio.h>
 #include <linux/mm.h>
-
+#include <linux/of_address.h>
 
 #include <asm/uaccess.h>  
 
