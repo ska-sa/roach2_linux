@@ -63,11 +63,6 @@ static inline int sigismember(sigset_t *set, int _sig)
 		return 1 & (set->sig[sig / _NSIG_BPW] >> (sig % _NSIG_BPW));
 }
 
-static inline int sigfindinword(unsigned long word)
-{
-	return ffz(~word);
-}
-
 #endif /* __HAVE_ARCH_SIG_BITOPS */
 
 static inline int sigisemptyset(sigset_t *set)
@@ -289,6 +284,22 @@ extern int get_signal_to_deliver(siginfo_t *info, struct k_sigaction *return_ka,
 extern void signal_setup_done(int failed, struct ksignal *ksig, int stepping);
 extern void signal_delivered(int sig, siginfo_t *info, struct k_sigaction *ka, struct pt_regs *regs, int stepping);
 extern void exit_signals(struct task_struct *tsk);
+extern void kernel_sigaction(int, __sighandler_t);
+
+static inline void allow_signal(int sig)
+{
+	/*
+	 * Kernel threads handle their own signals. Let the signal code
+	 * know it'll be handled, so that they don't get converted to
+	 * SIGKILL or just silently dropped.
+	 */
+	kernel_sigaction(sig, (__force __sighandler_t)2);
+}
+
+static inline void disallow_signal(int sig)
+{
+	kernel_sigaction(sig, SIG_IGN);
+}
 
 /*
  * Eventually that'll replace get_signal_to_deliver(); macro for now,
@@ -433,6 +444,14 @@ void signals_init(void);
 
 int restore_altstack(const stack_t __user *);
 int __save_altstack(stack_t __user *, unsigned long);
+
+#define save_altstack_ex(uss, sp) do { \
+	stack_t __user *__uss = uss; \
+	struct task_struct *t = current; \
+	put_user_ex((void __user *)t->sas_ss_sp, &__uss->ss_sp); \
+	put_user_ex(sas_ss_flags(sp), &__uss->ss_flags); \
+	put_user_ex(t->sas_ss_size, &__uss->ss_size); \
+} while (0);
 
 #ifdef CONFIG_PROC_FS
 struct seq_file;

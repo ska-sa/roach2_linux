@@ -82,7 +82,7 @@ static int try_rdio = 1;
 static int try_wdio = 1;
 
 static struct class st_sysfs_class;
-static struct device_attribute st_dev_attrs[];
+static const struct attribute_group *st_dev_groups[];
 
 MODULE_AUTHOR("Kai Makisara");
 MODULE_DESCRIPTION("SCSI tape (st) driver");
@@ -484,7 +484,7 @@ static int st_scsi_execute(struct st_request *SRpnt, const unsigned char *cmd,
 	if (!req)
 		return DRIVER_ERROR << 24;
 
-	req->cmd_type = REQ_TYPE_BLOCK_PC;
+	blk_rq_set_block_pc(req);
 	req->cmd_flags |= REQ_QUIET;
 
 	mdata->null_mapped = 1;
@@ -2198,12 +2198,19 @@ static int st_set_options(struct scsi_tape *STp, long options)
 	struct st_modedef *STm;
 	char *name = tape_name(STp);
 	struct cdev *cd0, *cd1;
+	struct device *d0, *d1;
 
 	STm = &(STp->modes[STp->current_mode]);
 	if (!STm->defined) {
-		cd0 = STm->cdevs[0]; cd1 = STm->cdevs[1];
+		cd0 = STm->cdevs[0];
+		cd1 = STm->cdevs[1];
+		d0  = STm->devs[0];
+		d1  = STm->devs[1];
 		memcpy(STm, &(STp->modes[0]), sizeof(struct st_modedef));
-		STm->cdevs[0] = cd0; STm->cdevs[1] = cd1;
+		STm->cdevs[0] = cd0;
+		STm->cdevs[1] = cd1;
+		STm->devs[0]  = d0;
+		STm->devs[1]  = d1;
 		modes_defined = 1;
                 DEBC(printk(ST_DEB_MSG
                             "%s: Initialized mode %d definition from mode 0\n",
@@ -3719,7 +3726,7 @@ static struct st_buffer *new_tape_buffer(int need_dma, int max_sg)
 
 static int enlarge_buffer(struct st_buffer * STbuffer, int new_size, int need_dma)
 {
-	int segs, nbr, max_segs, b_size, order, got;
+	int segs, max_segs, b_size, order, got;
 	gfp_t priority;
 
 	if (new_size <= STbuffer->buffer_size)
@@ -3729,9 +3736,6 @@ static int enlarge_buffer(struct st_buffer * STbuffer, int new_size, int need_dm
 		normalize_buffer(STbuffer);  /* Avoid extra segment */
 
 	max_segs = STbuffer->use_sg;
-	nbr = max_segs - STbuffer->frp_segs;
-	if (nbr <= 0)
-		return 0;
 
 	priority = GFP_KERNEL | __GFP_NOWARN;
 	if (need_dma)
@@ -4274,7 +4278,7 @@ static void scsi_tape_release(struct kref *kref)
 
 static struct class st_sysfs_class = {
 	.name = "scsi_tape",
-	.dev_attrs = st_dev_attrs,
+	.dev_groups = st_dev_groups,
 };
 
 static int __init init_st(void)
@@ -4408,6 +4412,7 @@ defined_show(struct device *dev, struct device_attribute *attr, char *buf)
 	l = snprintf(buf, PAGE_SIZE, "%d\n", STm->defined);
 	return l;
 }
+static DEVICE_ATTR_RO(defined);
 
 static ssize_t
 default_blksize_show(struct device *dev, struct device_attribute *attr,
@@ -4419,7 +4424,7 @@ default_blksize_show(struct device *dev, struct device_attribute *attr,
 	l = snprintf(buf, PAGE_SIZE, "%d\n", STm->default_blksize);
 	return l;
 }
-
+static DEVICE_ATTR_RO(default_blksize);
 
 static ssize_t
 default_density_show(struct device *dev, struct device_attribute *attr,
@@ -4433,6 +4438,7 @@ default_density_show(struct device *dev, struct device_attribute *attr,
 	l = snprintf(buf, PAGE_SIZE, fmt, STm->default_density);
 	return l;
 }
+static DEVICE_ATTR_RO(default_density);
 
 static ssize_t
 default_compression_show(struct device *dev, struct device_attribute *attr,
@@ -4444,6 +4450,7 @@ default_compression_show(struct device *dev, struct device_attribute *attr,
 	l = snprintf(buf, PAGE_SIZE, "%d\n", STm->default_compression - 1);
 	return l;
 }
+static DEVICE_ATTR_RO(default_compression);
 
 static ssize_t
 options_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -4472,15 +4479,17 @@ options_show(struct device *dev, struct device_attribute *attr, char *buf)
 	l = snprintf(buf, PAGE_SIZE, "0x%08x\n", options);
 	return l;
 }
+static DEVICE_ATTR_RO(options);
 
-static struct device_attribute st_dev_attrs[] = {
-	__ATTR_RO(defined),
-	__ATTR_RO(default_blksize),
-	__ATTR_RO(default_density),
-	__ATTR_RO(default_compression),
-	__ATTR_RO(options),
-	__ATTR_NULL,
+static struct attribute *st_dev_attrs[] = {
+	&dev_attr_defined.attr,
+	&dev_attr_default_blksize.attr,
+	&dev_attr_default_density.attr,
+	&dev_attr_default_compression.attr,
+	&dev_attr_options.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(st_dev);
 
 /* The following functions may be useful for a larger audience. */
 static int sgl_map_user_pages(struct st_buffer *STbp,

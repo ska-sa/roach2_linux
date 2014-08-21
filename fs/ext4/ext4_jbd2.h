@@ -197,7 +197,7 @@ static inline void ext4_journal_callback_add(handle_t *handle,
  * ext4_journal_callback_del: delete a registered callback
  * @handle: active journal transaction handle on which callback was registered
  * @jce: registered journal callback entry to unregister
- * Return true if object was sucessfully removed
+ * Return true if object was successfully removed
  */
 static inline bool ext4_journal_callback_try_del(handle_t *handle,
 					     struct ext4_journal_cb_entry *jce)
@@ -231,10 +231,6 @@ int ext4_mark_inode_dirty(handle_t *handle, struct inode *inode);
 /*
  * Wrapper functions with which ext4 calls into JBD.
  */
-void ext4_journal_abort_handle(const char *caller, unsigned int line,
-			       const char *err_fn,
-		struct buffer_head *bh, handle_t *handle, int err);
-
 int __ext4_journal_get_write_access(const char *where, unsigned int line,
 				    handle_t *handle, struct buffer_head *bh);
 

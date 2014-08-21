@@ -70,7 +70,7 @@ static int compat_hdio_getgeo(struct gendisk *disk, struct block_device *bdev,
 		return ret;
 
 	ret = copy_to_user(ugeo, &geo, 4);
-	ret |= __put_user(geo.start, &ugeo->start);
+	ret |= put_user(geo.start, &ugeo->start);
 	if (ret)
 		ret = -EFAULT;
 
@@ -690,6 +690,7 @@ long compat_blkdev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 	case BLKROSET:
 	case BLKDISCARD:
 	case BLKSECDISCARD:
+	case BLKZEROOUT:
 	/*
 	 * the ones below are implemented in blkdev_locked_ioctl,
 	 * but we call blkdev_ioctl, which gets the lock for us

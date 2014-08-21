@@ -36,12 +36,11 @@
 
 #define DEBUG_SUBSYSTEM S_LOV
 
-#include <linux/libcfs/libcfs.h>
+#include "../../include/linux/libcfs/libcfs.h"
 
-#include <obd_class.h>
-#include <obd_lov.h>
-#include <lustre/lustre_idl.h>
-
+#include "../include/obd_class.h"
+#include "../include/obd_ost.h"
+#include "../include/lustre/lustre_idl.h"
 #include "lov_internal.h"
 
 static void lov_init_set(struct lov_request_set *set)
@@ -50,7 +49,7 @@ static void lov_init_set(struct lov_request_set *set)
 	atomic_set(&set->set_completes, 0);
 	atomic_set(&set->set_success, 0);
 	atomic_set(&set->set_finish_checked, 0);
-	set->set_cookies = 0;
+	set->set_cookies = NULL;
 	INIT_LIST_HEAD(&set->set_list);
 	atomic_set(&set->set_refcount, 1);
 	init_waitqueue_head(&set->set_waitq);
@@ -60,7 +59,6 @@ static void lov_init_set(struct lov_request_set *set)
 void lov_finish_set(struct lov_request_set *set)
 {
 	struct list_head *pos, *n;
-	ENTRY;
 
 	LASSERT(set);
 	list_for_each_safe(pos, n, &set->set_list) {
@@ -87,7 +85,6 @@ void lov_finish_set(struct lov_request_set *set)
 		lov_llh_put(set->set_lockh);
 
 	OBD_FREE(set, sizeof(*set));
-	EXIT;
 }
 
 int lov_set_finished(struct lov_request_set *set, int idempotent)
@@ -122,7 +119,6 @@ int lov_update_common_set(struct lov_request_set *set,
 			  struct lov_request *req, int rc)
 {
 	struct lov_obd *lov = &set->set_exp->exp_obd->u.lov;
-	ENTRY;
 
 	lov_update_set(set, req, rc);
 
@@ -132,7 +128,7 @@ int lov_update_common_set(struct lov_request_set *set,
 		rc = 0;
 
 	/* FIXME in raid1 regime, should return 0 */
-	RETURN(rc);
+	return rc;
 }
 
 void lov_set_add_req(struct lov_request *req, struct lov_request_set *set)
@@ -144,16 +140,16 @@ void lov_set_add_req(struct lov_request *req, struct lov_request_set *set)
 
 static int lov_check_set(struct lov_obd *lov, int idx)
 {
-	int rc = 0;
+	int rc;
+	struct lov_tgt_desc *tgt;
+
 	mutex_lock(&lov->lov_lock);
-
-	if (lov->lov_tgts[idx] == NULL ||
-	    lov->lov_tgts[idx]->ltd_active ||
-	    (lov->lov_tgts[idx]->ltd_exp != NULL &&
-	     class_exp2cliimp(lov->lov_tgts[idx]->ltd_exp)->imp_connect_tried))
-		rc = 1;
-
+	tgt = lov->lov_tgts[idx];
+	rc = !tgt || tgt->ltd_active ||
+		(tgt->ltd_exp &&
+		 class_exp2cliimp(tgt->ltd_exp)->imp_connect_tried);
 	mutex_unlock(&lov->lov_lock);
+
 	return rc;
 }
 
@@ -198,13 +194,9 @@ out:
 	return rc;
 }
 
-extern void osc_update_enqueue(struct lustre_handle *lov_lockhp,
-			       struct lov_oinfo *loi, int flags,
-			       struct ost_lvb *lvb, __u32 mode, int rc);
-
 static int lov_update_enqueue_lov(struct obd_export *exp,
 				  struct lustre_handle *lov_lockhp,
-				  struct lov_oinfo *loi, int flags, int idx,
+				  struct lov_oinfo *loi, __u64 flags, int idx,
 				  struct ost_id *oi, int rc)
 {
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
@@ -232,7 +224,6 @@ int lov_update_enqueue_set(struct lov_request *req, __u32 mode, int rc)
 	struct lustre_handle *lov_lockhp;
 	struct obd_info *oi = set->set_oi;
 	struct lov_oinfo *loi;
-	ENTRY;
 
 	LASSERT(oi != NULL);
 
@@ -249,12 +240,12 @@ int lov_update_enqueue_set(struct lov_request *req, __u32 mode, int rc)
 	osc_update_enqueue(lov_lockhp, loi, oi->oi_flags,
 			   &req->rq_oi.oi_md->lsm_oinfo[0]->loi_lvb, mode, rc);
 	if (rc == ELDLM_LOCK_ABORTED && (oi->oi_flags & LDLM_FL_HAS_INTENT))
-		memset(lov_lockhp, 0, sizeof *lov_lockhp);
+		memset(lov_lockhp, 0, sizeof(*lov_lockhp));
 	rc = lov_update_enqueue_lov(set->set_exp, lov_lockhp, loi, oi->oi_flags,
 				    req->rq_idx, &oi->oi_md->lsm_oi, rc);
 	lov_stripe_unlock(oi->oi_md);
 	lov_update_set(set, req, rc);
-	RETURN(rc);
+	return rc;
 }
 
 /* The callback for osc_enqueue that updates lov info for every OSC request. */
@@ -275,11 +266,10 @@ static int enqueue_done(struct lov_request_set *set, __u32 mode)
 	struct lov_obd *lov = &set->set_exp->exp_obd->u.lov;
 	int completes = atomic_read(&set->set_completes);
 	int rc = 0;
-	ENTRY;
 
 	/* enqueue/match success, just return */
 	if (completes && completes == atomic_read(&set->set_success))
-		RETURN(0);
+		return 0;
 
 	/* cancel enqueued/matched locks */
 	list_for_each_entry(req, &set->set_list, rq_link) {
@@ -305,17 +295,16 @@ static int enqueue_done(struct lov_request_set *set, __u32 mode)
 	}
 	if (set->set_lockh)
 		lov_llh_put(set->set_lockh);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_enqueue_set(struct lov_request_set *set, __u32 mode, int rc,
 			 struct ptlrpc_request_set *rqset)
 {
 	int ret = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	/* Do enqueue_done only for sync requests and if any request
 	 * succeeded. */
@@ -328,7 +317,7 @@ int lov_fini_enqueue_set(struct lov_request_set *set, __u32 mode, int rc,
 
 	lov_put_reqset(set);
 
-	RETURN(rc ? rc : ret);
+	return rc ? rc : ret;
 }
 
 static void lov_llh_addref(void *llhp)
@@ -349,7 +338,7 @@ static struct lov_lock_handles *lov_llh_new(struct lov_stripe_md *lsm)
 {
 	struct lov_lock_handles *llh;
 
-	OBD_ALLOC(llh, sizeof *llh +
+	OBD_ALLOC(llh, sizeof(*llh) +
 		  sizeof(*llh->llh_handles) * lsm->lsm_stripe_count);
 	if (llh == NULL)
 		return NULL;
@@ -369,11 +358,10 @@ int lov_prep_enqueue_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	struct lov_request_set *set;
 	int i, rc = 0;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -445,19 +433,18 @@ int lov_prep_enqueue_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(0);
+	return 0;
 out_set:
 	lov_fini_enqueue_set(set, einfo->ei_mode, rc, NULL);
-	RETURN(rc);
+	return rc;
 }
 
-int lov_fini_match_set(struct lov_request_set *set, __u32 mode, int flags)
+int lov_fini_match_set(struct lov_request_set *set, __u32 mode, __u64 flags)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	rc = enqueue_done(set, mode);
 	if ((set->set_count == atomic_read(&set->set_success)) &&
@@ -466,7 +453,7 @@ int lov_fini_match_set(struct lov_request_set *set, __u32 mode, int flags)
 
 	lov_put_reqset(set);
 
-	RETURN(rc);
+	return rc;
 }
 
 int lov_prep_match_set(struct obd_export *exp, struct obd_info *oinfo,
@@ -477,11 +464,10 @@ int lov_prep_match_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	struct lov_request_set *set;
 	int i, rc = 0;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -492,7 +478,7 @@ int lov_prep_match_set(struct obd_export *exp, struct obd_info *oinfo,
 		GOTO(out_set, rc = -ENOMEM);
 	lockh->cookie = set->set_lockh->llh_handle.h_cookie;
 
-	for (i = 0; i < lsm->lsm_stripe_count; i++){
+	for (i = 0; i < lsm->lsm_stripe_count; i++) {
 		struct lov_oinfo *loi;
 		struct lov_request *req;
 		obd_off start, end;
@@ -535,19 +521,18 @@ int lov_prep_match_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_match_set(set, mode, 0);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_cancel_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 
 	LASSERT(set->set_exp);
 	if (set->set_lockh)
@@ -555,7 +540,7 @@ int lov_fini_cancel_set(struct lov_request_set *set)
 
 	lov_put_reqset(set);
 
-	RETURN(rc);
+	return rc;
 }
 
 int lov_prep_cancel_set(struct obd_export *exp, struct obd_info *oinfo,
@@ -565,11 +550,10 @@ int lov_prep_cancel_set(struct obd_export *exp, struct obd_info *oinfo,
 {
 	struct lov_request_set *set;
 	int i, rc = 0;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -582,7 +566,7 @@ int lov_prep_cancel_set(struct obd_export *exp, struct obd_info *oinfo,
 	}
 	lockh->cookie = set->set_lockh->llh_handle.h_cookie;
 
-	for (i = 0; i < lsm->lsm_stripe_count; i++){
+	for (i = 0; i < lsm->lsm_stripe_count; i++) {
 		struct lov_request *req;
 		struct lustre_handle *lov_lockhp;
 		struct lov_oinfo *loi = lsm->lsm_oinfo[i];
@@ -617,10 +601,10 @@ int lov_prep_cancel_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_cancel_set(set);
-	RETURN(rc);
+	return rc;
 }
 static int common_attr_done(struct lov_request_set *set)
 {
@@ -628,21 +612,20 @@ static int common_attr_done(struct lov_request_set *set)
 	struct lov_request *req;
 	struct obdo *tmp_oa;
 	int rc = 0, attrset = 0;
-	ENTRY;
 
 	LASSERT(set->set_oi != NULL);
 
 	if (set->set_oi->oi_oa == NULL)
-		RETURN(0);
+		return 0;
 
 	if (!atomic_read(&set->set_success))
-		RETURN(-EIO);
+		return -EIO;
 
 	OBDO_ALLOC(tmp_oa);
 	if (tmp_oa == NULL)
 		GOTO(out, rc = -ENOMEM);
 
-	list_for_each (pos, &set->set_list) {
+	list_for_each(pos, &set->set_list) {
 		req = list_entry(pos, struct lov_request, rq_link);
 
 		if (!req->rq_complete || req->rq_rc)
@@ -670,7 +653,7 @@ static int common_attr_done(struct lov_request_set *set)
 out:
 	if (tmp_oa)
 		OBDO_FREE(tmp_oa);
-	RETURN(rc);
+	return rc;
 
 }
 
@@ -680,9 +663,8 @@ static int brw_done(struct lov_request_set *set)
 	struct lov_oinfo     *loi = NULL;
 	struct list_head *pos;
 	struct lov_request *req;
-	ENTRY;
 
-	list_for_each (pos, &set->set_list) {
+	list_for_each(pos, &set->set_list) {
 		req = list_entry(pos, struct lov_request, rq_link);
 
 		if (!req->rq_complete || req->rq_rc)
@@ -694,16 +676,15 @@ static int brw_done(struct lov_request_set *set)
 			loi->loi_lvb.lvb_blocks = req->rq_oi.oi_oa->o_blocks;
 	}
 
-	RETURN(0);
+	return 0;
 }
 
 int lov_fini_brw_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	if (atomic_read(&set->set_completes)) {
 		rc = brw_done(set);
@@ -711,7 +692,7 @@ int lov_fini_brw_set(struct lov_request_set *set)
 	}
 	lov_put_reqset(set);
 
-	RETURN(rc);
+	return rc;
 }
 
 int lov_prep_brw_set(struct obd_export *exp, struct obd_info *oinfo,
@@ -727,11 +708,10 @@ int lov_prep_brw_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	int rc = 0, i, shift;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -754,7 +734,7 @@ int lov_prep_brw_set(struct obd_export *exp, struct obd_info *oinfo,
 
 	/* alloc and initialize lov request */
 	shift = 0;
-	for (i = 0; i < oinfo->oi_md->lsm_stripe_count; i++){
+	for (i = 0; i < oinfo->oi_md->lsm_stripe_count; i++) {
 		struct lov_oinfo *loi = NULL;
 		struct lov_request *req;
 
@@ -832,31 +812,31 @@ out:
 	else
 		lov_fini_brw_set(set);
 
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_getattr_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	if (atomic_read(&set->set_completes))
 		rc = common_attr_done(set);
 
 	lov_put_reqset(set);
 
-	RETURN(rc);
+	return rc;
 }
 
-/* The callback for osc_getattr_async that finilizes a request info when a
+/* The callback for osc_getattr_async that finalizes a request info when a
  * response is received. */
 static int cb_getattr_update(void *cookie, int rc)
 {
 	struct obd_info *oinfo = cookie;
 	struct lov_request *lovreq;
+
 	lovreq = container_of(oinfo, struct lov_request, rq_oi);
 	return lov_update_common_set(lovreq->rq_rqset, lovreq, rc);
 }
@@ -867,11 +847,10 @@ int lov_prep_getattr_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	int rc = 0, i;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -913,18 +892,16 @@ int lov_prep_getattr_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_getattr_set(set);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_destroy_set(struct lov_request_set *set)
 {
-	ENTRY;
-
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	if (atomic_read(&set->set_completes)) {
 		/* FIXME update qos data here */
@@ -932,7 +909,7 @@ int lov_fini_destroy_set(struct lov_request_set *set)
 
 	lov_put_reqset(set);
 
-	RETURN(0);
+	return 0;
 }
 
 int lov_prep_destroy_set(struct obd_export *exp, struct obd_info *oinfo,
@@ -943,11 +920,10 @@ int lov_prep_destroy_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	int rc = 0, i;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -987,19 +963,18 @@ int lov_prep_destroy_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_destroy_set(set);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_setattr_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	if (atomic_read(&set->set_completes)) {
 		rc = common_attr_done(set);
@@ -1007,7 +982,7 @@ int lov_fini_setattr_set(struct lov_request_set *set)
 	}
 
 	lov_put_reqset(set);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_update_setattr_set(struct lov_request_set *set,
@@ -1015,7 +990,6 @@ int lov_update_setattr_set(struct lov_request_set *set,
 {
 	struct lov_obd *lov = &req->rq_rqset->set_exp->exp_obd->u.lov;
 	struct lov_stripe_md *lsm = req->rq_rqset->set_oi->oi_md;
-	ENTRY;
 
 	lov_update_set(set, req, rc);
 
@@ -1036,15 +1010,16 @@ int lov_update_setattr_set(struct lov_request_set *set,
 				req->rq_oi.oi_oa->o_atime;
 	}
 
-	RETURN(rc);
+	return rc;
 }
 
-/* The callback for osc_setattr_async that finilizes a request info when a
+/* The callback for osc_setattr_async that finalizes a request info when a
  * response is received. */
 static int cb_setattr_update(void *cookie, int rc)
 {
 	struct obd_info *oinfo = cookie;
 	struct lov_request *lovreq;
+
 	lovreq = container_of(oinfo, struct lov_request, rq_oi);
 	return lov_update_setattr_set(lovreq->rq_rqset, lovreq, rc);
 }
@@ -1056,11 +1031,10 @@ int lov_prep_setattr_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	int rc = 0, i;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -1104,7 +1078,7 @@ int lov_prep_setattr_set(struct obd_export *exp, struct obd_info *oinfo,
 			if (off < 0 && req->rq_oi.oi_oa->o_size)
 				req->rq_oi.oi_oa->o_size--;
 
-			CDEBUG(D_INODE, "stripe %d has size "LPU64"/"LPU64"\n",
+			CDEBUG(D_INODE, "stripe %d has size %llu/%llu\n",
 			       i, req->rq_oi.oi_oa->o_size,
 			       oinfo->oi_oa->o_size);
 		}
@@ -1113,19 +1087,18 @@ int lov_prep_setattr_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_setattr_set(set);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_punch_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	if (atomic_read(&set->set_completes)) {
 		rc = -EIO;
@@ -1136,7 +1109,7 @@ int lov_fini_punch_set(struct lov_request_set *set)
 
 	lov_put_reqset(set);
 
-	RETURN(rc);
+	return rc;
 }
 
 int lov_update_punch_set(struct lov_request_set *set,
@@ -1144,7 +1117,6 @@ int lov_update_punch_set(struct lov_request_set *set,
 {
 	struct lov_obd *lov = &req->rq_rqset->set_exp->exp_obd->u.lov;
 	struct lov_stripe_md *lsm = req->rq_rqset->set_oi->oi_md;
-	ENTRY;
 
 	lov_update_set(set, req, rc);
 
@@ -1162,15 +1134,16 @@ int lov_update_punch_set(struct lov_request_set *set,
 		lov_stripe_unlock(lsm);
 	}
 
-	RETURN(rc);
+	return rc;
 }
 
-/* The callback for osc_punch that finilizes a request info when a response
+/* The callback for osc_punch that finalizes a request info when a response
  * is received. */
 static int cb_update_punch(void *cookie, int rc)
 {
 	struct obd_info *oinfo = cookie;
 	struct lov_request *lovreq;
+
 	lovreq = container_of(oinfo, struct lov_request, rq_oi);
 	return lov_update_punch_set(lovreq->rq_rqset, lovreq, rc);
 }
@@ -1182,11 +1155,10 @@ int lov_prep_punch_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	int rc = 0, i;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_oi = oinfo;
@@ -1238,19 +1210,18 @@ int lov_prep_punch_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_punch_set(set);
-	RETURN(rc);
+	return rc;
 }
 
 int lov_fini_sync_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 	LASSERT(set->set_exp);
 	if (atomic_read(&set->set_completes)) {
 		if (!atomic_read(&set->set_success))
@@ -1260,11 +1231,11 @@ int lov_fini_sync_set(struct lov_request_set *set)
 
 	lov_put_reqset(set);
 
-	RETURN(rc);
+	return rc;
 }
 
-/* The callback for osc_sync that finilizes a request info when a
- * response is recieved. */
+/* The callback for osc_sync that finalizes a request info when a
+ * response is received. */
 static int cb_sync_update(void *cookie, int rc)
 {
 	struct obd_info *oinfo = cookie;
@@ -1281,11 +1252,10 @@ int lov_prep_sync_set(struct obd_export *exp, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &exp->exp_obd->u.lov;
 	int rc = 0, i;
-	ENTRY;
 
 	OBD_ALLOC_PTR(set);
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_exp = exp;
@@ -1330,10 +1300,10 @@ int lov_prep_sync_set(struct obd_export *exp, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_sync_set(set);
-	RETURN(rc);
+	return rc;
 }
 
 #define LOV_U64_MAX ((__u64)~0ULL)
@@ -1343,12 +1313,10 @@ out_set:
 			(tot) = LOV_U64_MAX;			    \
 		else						    \
 			(tot) += (add);				 \
-	} while(0)
+	} while (0)
 
 int lov_fini_statfs(struct obd_device *obd, struct obd_statfs *osfs,int success)
 {
-	ENTRY;
-
 	if (success) {
 		__u32 expected_stripes = lov_get_stripecnt(&obd->u.lov,
 							   LOV_MAGIC, 0);
@@ -1361,26 +1329,25 @@ int lov_fini_statfs(struct obd_device *obd, struct obd_statfs *osfs,int success)
 		memcpy(&obd->obd_osfs, osfs, sizeof(*osfs));
 		obd->obd_osfs_age = cfs_time_current_64();
 		spin_unlock(&obd->obd_osfs_lock);
-		RETURN(0);
+		return 0;
 	}
 
-	RETURN(-EIO);
+	return -EIO;
 }
 
 int lov_fini_statfs_set(struct lov_request_set *set)
 {
 	int rc = 0;
-	ENTRY;
 
 	if (set == NULL)
-		RETURN(0);
+		return 0;
 
 	if (atomic_read(&set->set_completes)) {
 		rc = lov_fini_statfs(set->set_obd, set->set_oi->oi_osfs,
 				     atomic_read(&set->set_success));
 	}
 	lov_put_reqset(set);
-	RETURN(rc);
+	return rc;
 }
 
 void lov_update_statfs(struct obd_statfs *osfs, struct obd_statfs *lov_sfs,
@@ -1438,7 +1405,7 @@ void lov_update_statfs(struct obd_statfs *osfs, struct obd_statfs *lov_sfs,
 	}
 }
 
-/* The callback for osc_statfs_async that finilizes a request info when a
+/* The callback for osc_statfs_async that finalizes a request info when a
  * response is received. */
 static int cb_statfs_update(void *cookie, int rc)
 {
@@ -1450,7 +1417,6 @@ static int cb_statfs_update(void *cookie, int rc)
 	struct lov_tgt_desc *tgt;
 	struct obd_device *lovobd, *tgtobd;
 	int success;
-	ENTRY;
 
 	lovreq = container_of(oinfo, struct lov_request, rq_oi);
 	set = lovreq->rq_rqset;
@@ -1488,7 +1454,7 @@ out:
 				     atomic_read(&set->set_success));
 	}
 
-	RETURN(0);
+	return 0;
 }
 
 int lov_prep_statfs_set(struct obd_device *obd, struct obd_info *oinfo,
@@ -1497,11 +1463,10 @@ int lov_prep_statfs_set(struct obd_device *obd, struct obd_info *oinfo,
 	struct lov_request_set *set;
 	struct lov_obd *lov = &obd->u.lov;
 	int rc = 0, i;
-	ENTRY;
 
 	OBD_ALLOC(set, sizeof(*set));
 	if (set == NULL)
-		RETURN(-ENOMEM);
+		return -ENOMEM;
 	lov_init_set(set);
 
 	set->set_obd = obd;
@@ -1518,7 +1483,7 @@ int lov_prep_statfs_set(struct obd_device *obd, struct obd_info *oinfo,
 			continue;
 		}
 
-		/* skip targets that have been explicitely disabled by the
+		/* skip targets that have been explicitly disabled by the
 		 * administrator */
 		if (!lov->lov_tgts[i]->ltd_exp) {
 			CDEBUG(D_HA, "lov idx %d administratively disabled\n", i);
@@ -1544,8 +1509,8 @@ int lov_prep_statfs_set(struct obd_device *obd, struct obd_info *oinfo,
 	if (!set->set_count)
 		GOTO(out_set, rc = -EIO);
 	*reqset = set;
-	RETURN(rc);
+	return rc;
 out_set:
 	lov_fini_statfs_set(set);
-	RETURN(rc);
+	return rc;
 }

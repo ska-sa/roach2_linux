@@ -33,6 +33,7 @@
 #include <asm/ucontext.h>
 #include <asm/sigframe.h>
 #include <asm/syscalls.h>
+#include <asm/vdso.h>
 #include <arch/interrupts.h>
 
 #define DEBUG_SIG 0
@@ -190,7 +191,7 @@ static int setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 	if (err)
 		goto give_sigsegv;
 
-	restorer = VDSO_BASE;
+	restorer = VDSO_SYM(&__vdso_rt_sigreturn);
 	if (ka->sa.sa_flags & SA_RESTORER)
 		restorer = (unsigned long) ka->sa.sa_restorer;
 
@@ -320,14 +321,13 @@ int show_unhandled_signals = 1;
 
 static int __init crashinfo(char *str)
 {
-	unsigned long val;
 	const char *word;
 
 	if (*str == '\0')
-		val = 2;
-	else if (*str != '=' || strict_strtoul(++str, 0, &val) != 0)
+		show_unhandled_signals = 2;
+	else if (*str != '=' || kstrtoint(++str, 0, &show_unhandled_signals) != 0)
 		return 0;
-	show_unhandled_signals = val;
+
 	switch (show_unhandled_signals) {
 	case 0:
 		word = "No";

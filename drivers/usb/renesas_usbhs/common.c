@@ -15,12 +15,14 @@
  *
  */
 #include <linux/err.h>
+#include <linux/gpio.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 #include "common.h"
+#include "rcar2.h"
 
 /*
  *		image of renesas_usbhs
@@ -284,6 +286,8 @@ static void usbhsc_set_buswait(struct usbhs_priv *priv)
 /*
  *		platform default param
  */
+
+/* commonly used on old SH-Mobile SoCs */
 static u32 usbhsc_default_pipe_type[] = {
 		USB_ENDPOINT_XFER_CONTROL,
 		USB_ENDPOINT_XFER_ISOC,
@@ -295,6 +299,26 @@ static u32 usbhsc_default_pipe_type[] = {
 		USB_ENDPOINT_XFER_INT,
 		USB_ENDPOINT_XFER_INT,
 		USB_ENDPOINT_XFER_INT,
+};
+
+/* commonly used on newer SH-Mobile and R-Car SoCs */
+static u32 usbhsc_new_pipe_type[] = {
+		USB_ENDPOINT_XFER_CONTROL,
+		USB_ENDPOINT_XFER_ISOC,
+		USB_ENDPOINT_XFER_ISOC,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_INT,
+		USB_ENDPOINT_XFER_INT,
+		USB_ENDPOINT_XFER_INT,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
+		USB_ENDPOINT_XFER_BULK,
 };
 
 /*
@@ -416,15 +440,14 @@ static int usbhsc_drvcllbck_notify_hotplug(struct platform_device *pdev)
  */
 static int usbhs_probe(struct platform_device *pdev)
 {
-	struct renesas_usbhs_platform_info *info = pdev->dev.platform_data;
+	struct renesas_usbhs_platform_info *info = dev_get_platdata(&pdev->dev);
 	struct renesas_usbhs_driver_callback *dfunc;
 	struct usbhs_priv *priv;
 	struct resource *res, *irq_res;
 	int ret;
 
 	/* check platform information */
-	if (!info ||
-	    !info->platform_callback.get_id) {
+	if (!info) {
 		dev_err(&pdev->dev, "no platform information\n");
 		return -EINVAL;
 	}
@@ -451,12 +474,31 @@ static int usbhs_probe(struct platform_device *pdev)
 	/*
 	 * care platform info
 	 */
-	memcpy(&priv->pfunc,
-	       &info->platform_callback,
-	       sizeof(struct renesas_usbhs_platform_callback));
+
 	memcpy(&priv->dparam,
 	       &info->driver_param,
 	       sizeof(struct renesas_usbhs_driver_param));
+
+	switch (priv->dparam.type) {
+	case USBHS_TYPE_R8A7790:
+	case USBHS_TYPE_R8A7791:
+		priv->pfunc = usbhs_rcar2_ops;
+		if (!priv->dparam.pipe_type) {
+			priv->dparam.pipe_type = usbhsc_new_pipe_type;
+			priv->dparam.pipe_size =
+				ARRAY_SIZE(usbhsc_new_pipe_type);
+		}
+		break;
+	default:
+		if (!info->platform_callback.get_id) {
+			dev_err(&pdev->dev, "no platform callbacks");
+			return -EINVAL;
+		}
+		memcpy(&priv->pfunc,
+		       &info->platform_callback,
+		       sizeof(struct renesas_usbhs_platform_callback));
+		break;
+	}
 
 	/* set driver callback functions for platform */
 	dfunc			= &info->driver_callback;
@@ -499,13 +541,27 @@ static int usbhs_probe(struct platform_device *pdev)
 		goto probe_end_fifo_exit;
 
 	/* dev_set_drvdata should be called after usbhs_mod_init */
-	dev_set_drvdata(&pdev->dev, priv);
+	platform_set_drvdata(pdev, priv);
 
 	/*
 	 * deviece reset here because
 	 * USB device might be used in boot loader.
 	 */
 	usbhs_sys_clock_ctrl(priv, 0);
+
+	/* check GPIO determining if USB function should be enabled */
+	if (priv->dparam.enable_gpio) {
+		gpio_request_one(priv->dparam.enable_gpio, GPIOF_IN, NULL);
+		ret = !gpio_get_value(priv->dparam.enable_gpio);
+		gpio_free(priv->dparam.enable_gpio);
+		if (ret) {
+			dev_warn(&pdev->dev,
+				 "USB function not selected (GPIO %d)\n",
+				 priv->dparam.enable_gpio);
+			ret = -ENOTSUPP;
+			goto probe_end_mod_exit;
+		}
+	}
 
 	/*
 	 * platform call
@@ -558,7 +614,7 @@ probe_end_pipe_exit:
 static int usbhs_remove(struct platform_device *pdev)
 {
 	struct usbhs_priv *priv = usbhs_pdev_to_priv(pdev);
-	struct renesas_usbhs_platform_info *info = pdev->dev.platform_data;
+	struct renesas_usbhs_platform_info *info = dev_get_platdata(&pdev->dev);
 	struct renesas_usbhs_driver_callback *dfunc = &info->driver_callback;
 
 	dev_dbg(&pdev->dev, "usb remove\n");

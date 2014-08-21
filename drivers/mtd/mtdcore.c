@@ -157,6 +157,9 @@ static ssize_t mtd_type_show(struct device *dev,
 	case MTD_UBIVOLUME:
 		type = "ubi";
 		break;
+	case MTD_MLCNANDFLASH:
+		type = "mlc-nand";
+		break;
 	default:
 		type = "unknown";
 	}
@@ -285,6 +288,16 @@ static DEVICE_ATTR(bitflip_threshold, S_IRUGO | S_IWUSR,
 		   mtd_bitflip_threshold_show,
 		   mtd_bitflip_threshold_store);
 
+static ssize_t mtd_ecc_step_size_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct mtd_info *mtd = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", mtd->ecc_step_size);
+
+}
+static DEVICE_ATTR(ecc_step_size, S_IRUGO, mtd_ecc_step_size_show, NULL);
+
 static struct attribute *mtd_attrs[] = {
 	&dev_attr_type.attr,
 	&dev_attr_flags.attr,
@@ -296,18 +309,11 @@ static struct attribute *mtd_attrs[] = {
 	&dev_attr_numeraseregions.attr,
 	&dev_attr_name.attr,
 	&dev_attr_ecc_strength.attr,
+	&dev_attr_ecc_step_size.attr,
 	&dev_attr_bitflip_threshold.attr,
 	NULL,
 };
-
-static struct attribute_group mtd_group = {
-	.attrs		= mtd_attrs,
-};
-
-static const struct attribute_group *mtd_groups[] = {
-	&mtd_group,
-	NULL,
-};
+ATTRIBUTE_GROUPS(mtd);
 
 static struct device_type mtd_devtype = {
 	.name		= "mtd",
@@ -877,14 +883,14 @@ EXPORT_SYMBOL_GPL(mtd_read_oob);
  * devices. The user data is one time programmable but the factory data is read
  * only.
  */
-int mtd_get_fact_prot_info(struct mtd_info *mtd, struct otp_info *buf,
-			   size_t len)
+int mtd_get_fact_prot_info(struct mtd_info *mtd, size_t len, size_t *retlen,
+			   struct otp_info *buf)
 {
 	if (!mtd->_get_fact_prot_info)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return mtd->_get_fact_prot_info(mtd, buf, len);
+	return mtd->_get_fact_prot_info(mtd, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_get_fact_prot_info);
 
@@ -900,14 +906,14 @@ int mtd_read_fact_prot_reg(struct mtd_info *mtd, loff_t from, size_t len,
 }
 EXPORT_SYMBOL_GPL(mtd_read_fact_prot_reg);
 
-int mtd_get_user_prot_info(struct mtd_info *mtd, struct otp_info *buf,
-			   size_t len)
+int mtd_get_user_prot_info(struct mtd_info *mtd, size_t len, size_t *retlen,
+			   struct otp_info *buf)
 {
 	if (!mtd->_get_user_prot_info)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return mtd->_get_user_prot_info(mtd, buf, len);
+	return mtd->_get_user_prot_info(mtd, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_get_user_prot_info);
 
@@ -926,12 +932,22 @@ EXPORT_SYMBOL_GPL(mtd_read_user_prot_reg);
 int mtd_write_user_prot_reg(struct mtd_info *mtd, loff_t to, size_t len,
 			    size_t *retlen, u_char *buf)
 {
+	int ret;
+
 	*retlen = 0;
 	if (!mtd->_write_user_prot_reg)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return mtd->_write_user_prot_reg(mtd, to, len, retlen, buf);
+	ret = mtd->_write_user_prot_reg(mtd, to, len, retlen, buf);
+	if (ret)
+		return ret;
+
+	/*
+	 * If no data could be written at all, we are out of memory and
+	 * must return -ENOSPC.
+	 */
+	return (*retlen) ? 0 : -ENOSPC;
 }
 EXPORT_SYMBOL_GPL(mtd_write_user_prot_reg);
 

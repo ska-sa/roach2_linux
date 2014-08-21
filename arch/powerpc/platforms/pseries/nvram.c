@@ -31,7 +31,7 @@
 #define NVRW_CNT 0x20
 
 /*
- * Set oops header version to distingush between old and new format header.
+ * Set oops header version to distinguish between old and new format header.
  * lnx,oops-log partition max size is 4000, header version > 4000 will
  * help in identifying new header.
  */
@@ -43,8 +43,8 @@ static char nvram_buf[NVRW_CNT];	/* assume this is in the first 4GB */
 static DEFINE_SPINLOCK(nvram_lock);
 
 struct err_log_info {
-	int error_type;
-	unsigned int seq_num;
+	__be32 error_type;
+	__be32 seq_num;
 };
 
 struct nvram_os_partition {
@@ -79,9 +79,9 @@ static const char *pseries_nvram_os_partitions[] = {
 };
 
 struct oops_log_info {
-	u16 version;
-	u16 report_length;
-	u64 timestamp;
+	__be16 version;
+	__be16 report_length;
+	__be64 timestamp;
 } __attribute__((packed));
 
 static void oops_to_nvram(struct kmsg_dumper *dumper,
@@ -291,20 +291,20 @@ int nvram_write_os_partition(struct nvram_os_partition *part, char * buff,
 		length = part->size;
 	}
 
-	info.error_type = err_type;
-	info.seq_num = error_log_cnt;
+	info.error_type = cpu_to_be32(err_type);
+	info.seq_num = cpu_to_be32(error_log_cnt);
 
 	tmp_index = part->index;
 
 	rc = ppc_md.nvram_write((char *)&info, sizeof(struct err_log_info), &tmp_index);
 	if (rc <= 0) {
-		pr_err("%s: Failed nvram_write (%d)\n", __FUNCTION__, rc);
+		pr_err("%s: Failed nvram_write (%d)\n", __func__, rc);
 		return rc;
 	}
 
 	rc = ppc_md.nvram_write(buff, length, &tmp_index);
 	if (rc <= 0) {
-		pr_err("%s: Failed nvram_write (%d)\n", __FUNCTION__, rc);
+		pr_err("%s: Failed nvram_write (%d)\n", __func__, rc);
 		return rc;
 	}
 	
@@ -351,21 +351,20 @@ int nvram_read_partition(struct nvram_os_partition *part, char *buff,
 					sizeof(struct err_log_info),
 					&tmp_index);
 		if (rc <= 0) {
-			pr_err("%s: Failed nvram_read (%d)\n", __FUNCTION__,
-									rc);
+			pr_err("%s: Failed nvram_read (%d)\n", __func__, rc);
 			return rc;
 		}
 	}
 
 	rc = ppc_md.nvram_read(buff, length, &tmp_index);
 	if (rc <= 0) {
-		pr_err("%s: Failed nvram_read (%d)\n", __FUNCTION__, rc);
+		pr_err("%s: Failed nvram_read (%d)\n", __func__, rc);
 		return rc;
 	}
 
 	if (part->os_partition) {
-		*error_log_cnt = info.seq_num;
-		*err_type = info.error_type;
+		*error_log_cnt = be32_to_cpu(info.seq_num);
+		*err_type = be32_to_cpu(info.error_type);
 	}
 
 	return 0;
@@ -428,9 +427,6 @@ static int __init pseries_nvram_init_os_partition(struct nvram_os_partition
 {
 	loff_t p;
 	int size;
-
-	/* Scan nvram for partitions */
-	nvram_scan_partitions();
 
 	/* Look for ours */
 	p = nvram_find_partition(part->name, NVRAM_SIG_OS, &size);
@@ -532,72 +528,13 @@ static int zip_oops(size_t text_len)
 		pr_err("nvram: logging uncompressed oops/panic report\n");
 		return -1;
 	}
-	oops_hdr->version = OOPS_HDR_VERSION;
-	oops_hdr->report_length = (u16) zipped_len;
-	oops_hdr->timestamp = get_seconds();
+	oops_hdr->version = cpu_to_be16(OOPS_HDR_VERSION);
+	oops_hdr->report_length = cpu_to_be16(zipped_len);
+	oops_hdr->timestamp = cpu_to_be64(get_seconds());
 	return 0;
 }
 
 #ifdef CONFIG_PSTORE
-/* Derived from logfs_uncompress */
-int nvram_decompress(void *in, void *out, size_t inlen, size_t outlen)
-{
-	int err, ret;
-
-	ret = -EIO;
-	err = zlib_inflateInit(&stream);
-	if (err != Z_OK)
-		goto error;
-
-	stream.next_in = in;
-	stream.avail_in = inlen;
-	stream.total_in = 0;
-	stream.next_out = out;
-	stream.avail_out = outlen;
-	stream.total_out = 0;
-
-	err = zlib_inflate(&stream, Z_FINISH);
-	if (err != Z_STREAM_END)
-		goto error;
-
-	err = zlib_inflateEnd(&stream);
-	if (err != Z_OK)
-		goto error;
-
-	ret = stream.total_out;
-error:
-	return ret;
-}
-
-static int unzip_oops(char *oops_buf, char *big_buf)
-{
-	struct oops_log_info *oops_hdr = (struct oops_log_info *)oops_buf;
-	u64 timestamp = oops_hdr->timestamp;
-	char *big_oops_data = NULL;
-	char *oops_data_buf = NULL;
-	size_t big_oops_data_sz;
-	int unzipped_len;
-
-	big_oops_data = big_buf + sizeof(struct oops_log_info);
-	big_oops_data_sz = big_oops_buf_sz - sizeof(struct oops_log_info);
-	oops_data_buf = oops_buf + sizeof(struct oops_log_info);
-
-	unzipped_len = nvram_decompress(oops_data_buf, big_oops_data,
-					oops_hdr->report_length,
-					big_oops_data_sz);
-
-	if (unzipped_len < 0) {
-		pr_err("nvram: decompression failed; returned %d\n",
-								unzipped_len);
-		return -1;
-	}
-	oops_hdr = (struct oops_log_info *)big_buf;
-	oops_hdr->version = OOPS_HDR_VERSION;
-	oops_hdr->report_length = (u16) unzipped_len;
-	oops_hdr->timestamp = timestamp;
-	return 0;
-}
-
 static int nvram_pstore_open(struct pstore_info *psi)
 {
 	/* Reset the iterator to start reading partitions again */
@@ -613,7 +550,7 @@ static int nvram_pstore_open(struct pstore_info *psi)
  * @part:               pstore writes data to registered buffer in parts,
  *                      part number will indicate the same.
  * @count:              Indicates oops count
- * @hsize:              Size of header added by pstore
+ * @compressed:         Flag to indicate the log is compressed
  * @size:               number of bytes written to the registered buffer
  * @psi:                registered pstore_info structure
  *
@@ -624,7 +561,7 @@ static int nvram_pstore_open(struct pstore_info *psi)
 static int nvram_pstore_write(enum pstore_type_id type,
 				enum kmsg_dump_reason reason,
 				u64 *id, unsigned int part, int count,
-				size_t hsize, size_t size,
+				bool compressed, size_t size,
 				struct pstore_info *psi)
 {
 	int rc;
@@ -636,34 +573,15 @@ static int nvram_pstore_write(enum pstore_type_id type,
 				clobbering_unread_rtas_event())
 		return -1;
 
-	oops_hdr->version = OOPS_HDR_VERSION;
-	oops_hdr->report_length = (u16) size;
-	oops_hdr->timestamp = get_seconds();
+	oops_hdr->version = cpu_to_be16(OOPS_HDR_VERSION);
+	oops_hdr->report_length = cpu_to_be16(size);
+	oops_hdr->timestamp = cpu_to_be64(get_seconds());
 
-	if (big_oops_buf) {
-		rc = zip_oops(size);
-		/*
-		 * If compression fails copy recent log messages from
-		 * big_oops_buf to oops_data.
-		 */
-		if (rc != 0) {
-			size_t diff = size - oops_data_sz + hsize;
-
-			if (size > oops_data_sz) {
-				memcpy(oops_data, big_oops_buf, hsize);
-				memcpy(oops_data + hsize, big_oops_buf + diff,
-					oops_data_sz - hsize);
-
-				oops_hdr->report_length = (u16) oops_data_sz;
-			} else
-				memcpy(oops_data, big_oops_buf, size);
-		} else
-			err_type = ERR_TYPE_KERNEL_PANIC_GZ;
-	}
+	if (compressed)
+		err_type = ERR_TYPE_KERNEL_PANIC_GZ;
 
 	rc = nvram_write_os_partition(&oops_log_partition, oops_buf,
-		(int) (sizeof(*oops_hdr) + oops_hdr->report_length), err_type,
-		count);
+		(int) (sizeof(*oops_hdr) + size), err_type, count);
 
 	if (rc != 0)
 		return rc;
@@ -679,16 +597,15 @@ static int nvram_pstore_write(enum pstore_type_id type,
  */
 static ssize_t nvram_pstore_read(u64 *id, enum pstore_type_id *type,
 				int *count, struct timespec *time, char **buf,
-				struct pstore_info *psi)
+				bool *compressed, struct pstore_info *psi)
 {
 	struct oops_log_info *oops_hdr;
 	unsigned int err_type, id_no, size = 0;
 	struct nvram_os_partition *part = NULL;
-	char *buff = NULL, *big_buff = NULL;
-	int rc, sig = 0;
+	char *buff = NULL;
+	int sig = 0;
 	loff_t p;
 
-read_partition:
 	read_type++;
 
 	switch (nvram_type_ids[read_type]) {
@@ -749,30 +666,32 @@ read_partition:
 		*id = id_no;
 
 	if (nvram_type_ids[read_type] == PSTORE_TYPE_DMESG) {
+		size_t length, hdr_size;
+
 		oops_hdr = (struct oops_log_info *)buff;
-		*buf = buff + sizeof(*oops_hdr);
-
-		if (err_type == ERR_TYPE_KERNEL_PANIC_GZ) {
-			big_buff = kmalloc(big_oops_buf_sz, GFP_KERNEL);
-			if (!big_buff)
-				return -ENOMEM;
-
-			rc = unzip_oops(buff, big_buff);
-
-			if (rc != 0) {
-				kfree(buff);
-				kfree(big_buff);
-				goto read_partition;
-			}
-
-			oops_hdr = (struct oops_log_info *)big_buff;
-			*buf = big_buff + sizeof(*oops_hdr);
-			kfree(buff);
+		if (be16_to_cpu(oops_hdr->version) < OOPS_HDR_VERSION) {
+			/* Old format oops header had 2-byte record size */
+			hdr_size = sizeof(u16);
+			length = be16_to_cpu(oops_hdr->version);
+			time->tv_sec = 0;
+			time->tv_nsec = 0;
+		} else {
+			hdr_size = sizeof(*oops_hdr);
+			length = be16_to_cpu(oops_hdr->report_length);
+			time->tv_sec = be64_to_cpu(oops_hdr->timestamp);
+			time->tv_nsec = 0;
 		}
+		*buf = kmalloc(length, GFP_KERNEL);
+		if (*buf == NULL)
+			return -ENOMEM;
+		memcpy(*buf, buff + hdr_size, length);
+		kfree(buff);
 
-		time->tv_sec = oops_hdr->timestamp;
-		time->tv_nsec = 0;
-		return oops_hdr->report_length;
+		if (err_type == ERR_TYPE_KERNEL_PANIC_GZ)
+			*compressed = true;
+		else
+			*compressed = false;
+		return length;
 	}
 
 	*buf = buff;
@@ -791,13 +710,8 @@ static int nvram_pstore_init(void)
 {
 	int rc = 0;
 
-	if (big_oops_buf) {
-		nvram_pstore_info.buf = big_oops_buf;
-		nvram_pstore_info.bufsize = big_oops_buf_sz;
-	} else {
-		nvram_pstore_info.buf = oops_data;
-		nvram_pstore_info.bufsize = oops_data_sz;
-	}
+	nvram_pstore_info.buf = oops_data;
+	nvram_pstore_info.bufsize = oops_data_sz;
 
 	rc = pstore_register(&nvram_pstore_info);
 	if (rc != 0)
@@ -836,6 +750,11 @@ static void __init nvram_init_oops_partition(int rtas_partition_exists)
 	oops_data = oops_buf + sizeof(struct oops_log_info);
 	oops_data_sz = oops_log_partition.size - sizeof(struct oops_log_info);
 
+	rc = nvram_pstore_init();
+
+	if (!rc)
+		return;
+
 	/*
 	 * Figure compression (preceded by elimination of each line's <n>
 	 * severity prefix) will reduce the oops/panic report to at most
@@ -844,8 +763,8 @@ static void __init nvram_init_oops_partition(int rtas_partition_exists)
 	big_oops_buf_sz = (oops_data_sz * 100) / 45;
 	big_oops_buf = kmalloc(big_oops_buf_sz, GFP_KERNEL);
 	if (big_oops_buf) {
-		stream.workspace = kmalloc(zlib_deflate_workspacesize(
-				WINDOW_BITS, MEM_LEVEL), GFP_KERNEL);
+		stream.workspace =  kmalloc(zlib_deflate_workspacesize(
+					WINDOW_BITS, MEM_LEVEL), GFP_KERNEL);
 		if (!stream.workspace) {
 			pr_err("nvram: No memory for compression workspace; "
 				"skipping compression of %s partition data\n",
@@ -858,11 +777,6 @@ static void __init nvram_init_oops_partition(int rtas_partition_exists)
 			"skipping compression\n", oops_log_partition.name);
 		stream.workspace = NULL;
 	}
-
-	rc = nvram_pstore_init();
-
-	if (!rc)
-		return;
 
 	rc = kmsg_dump_register(&nvram_kmsg_dumper);
 	if (rc != 0) {
@@ -877,6 +791,9 @@ static int __init pseries_nvram_init_log_partitions(void)
 {
 	int rc;
 
+	/* Scan nvram for partitions */
+	nvram_scan_partitions();
+
 	rc = pseries_nvram_init_os_partition(&rtas_log_partition);
 	nvram_init_oops_partition(rc == 0);
 	return 0;
@@ -886,7 +803,7 @@ machine_arch_initcall(pseries, pseries_nvram_init_log_partitions);
 int __init pSeries_nvram_init(void)
 {
 	struct device_node *nvram;
-	const unsigned int *nbytes_p;
+	const __be32 *nbytes_p;
 	unsigned int proplen;
 
 	nvram = of_find_node_by_type(NULL, "nvram");
@@ -899,7 +816,7 @@ int __init pSeries_nvram_init(void)
 		return -EIO;
 	}
 
-	nvram_size = *nbytes_p;
+	nvram_size = be32_to_cpup(nbytes_p);
 
 	nvram_fetch = rtas_token("nvram-fetch");
 	nvram_store = rtas_token("nvram-store");
@@ -951,7 +868,7 @@ static void oops_to_nvram(struct kmsg_dumper *dumper,
 		break;
 	default:
 		pr_err("%s: ignoring unrecognized KMSG_DUMP_* reason %d\n",
-						__FUNCTION__, (int) reason);
+		       __func__, (int) reason);
 		return;
 	}
 
@@ -971,13 +888,13 @@ static void oops_to_nvram(struct kmsg_dumper *dumper,
 		kmsg_dump_get_buffer(dumper, false,
 				     oops_data, oops_data_sz, &text_len);
 		err_type = ERR_TYPE_KERNEL_PANIC;
-		oops_hdr->version = OOPS_HDR_VERSION;
-		oops_hdr->report_length = (u16) text_len;
-		oops_hdr->timestamp = get_seconds();
+		oops_hdr->version = cpu_to_be16(OOPS_HDR_VERSION);
+		oops_hdr->report_length = cpu_to_be16(text_len);
+		oops_hdr->timestamp = cpu_to_be64(get_seconds());
 	}
 
 	(void) nvram_write_os_partition(&oops_log_partition, oops_buf,
-		(int) (sizeof(*oops_hdr) + oops_hdr->report_length), err_type,
+		(int) (sizeof(*oops_hdr) + text_len), err_type,
 		++oops_count);
 
 	spin_unlock_irqrestore(&lock, flags);

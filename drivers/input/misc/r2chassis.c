@@ -8,7 +8,7 @@
 #include <linux/interrupt.h>
 #include <linux/slab.h>
 #include <linux/kdev_t.h>
-
+#include <linux/of_irq.h>
 
 MODULE_AUTHOR("Shanly Rajan <shanly.rajan@ska.ac.za>");
 MODULE_DESCRIPTION("ROACH2 chassis gpio driver");

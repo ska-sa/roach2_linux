@@ -46,6 +46,8 @@ int vhost_poll_start(struct vhost_poll *poll, struct file *file);
 void vhost_poll_stop(struct vhost_poll *poll);
 void vhost_poll_flush(struct vhost_poll *poll);
 void vhost_poll_queue(struct vhost_poll *poll);
+void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work);
+long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp);
 
 struct vhost_log {
 	u64 addr;
@@ -101,27 +103,19 @@ struct vhost_virtqueue {
 	struct iovec iov[UIO_MAXIOV];
 	struct iovec *indirect;
 	struct vring_used_elem *heads;
-	/* We use a kind of RCU to access private pointer.
-	 * All readers access it from worker, which makes it possible to
-	 * flush the vhost_work instead of synchronize_rcu. Therefore readers do
-	 * not need to call rcu_read_lock/rcu_read_unlock: the beginning of
-	 * vhost_work execution acts instead of rcu_read_lock() and the end of
-	 * vhost_work execution acts instead of rcu_read_unlock().
-	 * Writers use virtqueue mutex. */
-	void __rcu *private_data;
+	/* Protected by virtqueue mutex. */
+	struct vhost_memory *memory;
+	void *private_data;
+	unsigned acked_features;
 	/* Log write descriptors */
 	void __user *log_base;
 	struct vhost_log *log;
 };
 
 struct vhost_dev {
-	/* Readers use RCU to access memory table pointer
-	 * log base pointer and features.
-	 * Writers use mutex below.*/
-	struct vhost_memory __rcu *memory;
+	struct vhost_memory *memory;
 	struct mm_struct *mm;
 	struct mutex mutex;
-	unsigned acked_features;
 	struct vhost_virtqueue **vqs;
 	int nvqs;
 	struct file *log_file;
@@ -131,7 +125,7 @@ struct vhost_dev {
 	struct task_struct *worker;
 };
 
-long vhost_dev_init(struct vhost_dev *, struct vhost_virtqueue **vqs, int nvqs);
+void vhost_dev_init(struct vhost_dev *, struct vhost_virtqueue **vqs, int nvqs);
 long vhost_dev_set_owner(struct vhost_dev *dev);
 bool vhost_dev_has_owner(struct vhost_dev *dev);
 long vhost_dev_check_owner(struct vhost_dev *);
@@ -144,7 +138,7 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp);
 int vhost_vq_access_ok(struct vhost_virtqueue *vq);
 int vhost_log_access_ok(struct vhost_dev *);
 
-int vhost_get_vq_desc(struct vhost_dev *, struct vhost_virtqueue *,
+int vhost_get_vq_desc(struct vhost_virtqueue *,
 		      struct iovec iov[], unsigned int iov_count,
 		      unsigned int *out_num, unsigned int *in_num,
 		      struct vhost_log *log, unsigned int *log_num);
@@ -178,13 +172,8 @@ enum {
 			 (1ULL << VHOST_F_LOG_ALL),
 };
 
-static inline int vhost_has_feature(struct vhost_dev *dev, int bit)
+static inline int vhost_has_feature(struct vhost_virtqueue *vq, int bit)
 {
-	unsigned acked_features;
-
-	/* TODO: check that we are running from vhost_worker or dev mutex is
-	 * held? */
-	acked_features = rcu_dereference_index_check(dev->acked_features, 1);
-	return acked_features & (1 << bit);
+	return vq->acked_features & (1 << bit);
 }
 #endif

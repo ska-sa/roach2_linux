@@ -19,6 +19,7 @@
 #define F2FS_LOG_SECTORS_PER_BLOCK	3	/* 4KB: F2FS_BLKSIZE */
 #define F2FS_BLKSIZE			4096	/* support only 4KB block */
 #define F2FS_MAX_EXTENSION		64	/* # of extension entries */
+#define F2FS_BLK_ALIGN(x)	(((x) + F2FS_BLKSIZE - 1) / F2FS_BLKSIZE)
 
 #define NULL_ADDR		((block_t)0)	/* used as block_t addresses */
 #define NEW_ADDR		((block_t)-1)	/* used as block_t addresses */
@@ -75,6 +76,7 @@ struct f2fs_super_block {
 	__le16 volume_name[512];	/* volume name */
 	__le32 extension_count;		/* # of extensions below */
 	__u8 extension_list[F2FS_MAX_EXTENSION][8];	/* extension array */
+	__le32 cp_payload;
 } __packed;
 
 /*
@@ -140,14 +142,34 @@ struct f2fs_extent {
 } __packed;
 
 #define F2FS_NAME_LEN		255
-#define ADDRS_PER_INODE         923	/* Address Pointers in an Inode */
-#define ADDRS_PER_BLOCK         1018	/* Address Pointers in a Direct Block */
-#define NIDS_PER_BLOCK          1018	/* Node IDs in an Indirect Block */
+#define F2FS_INLINE_XATTR_ADDRS	50	/* 200 bytes for inline xattrs */
+#define DEF_ADDRS_PER_INODE	923	/* Address Pointers in an Inode */
+#define ADDRS_PER_INODE(fi)	addrs_per_inode(fi)
+#define ADDRS_PER_BLOCK		1018	/* Address Pointers in a Direct Block */
+#define NIDS_PER_BLOCK		1018	/* Node IDs in an Indirect Block */
+
+#define ADDRS_PER_PAGE(page, fi)	\
+	(IS_INODE(page) ? ADDRS_PER_INODE(fi) : ADDRS_PER_BLOCK)
+
+#define	NODE_DIR1_BLOCK		(DEF_ADDRS_PER_INODE + 1)
+#define	NODE_DIR2_BLOCK		(DEF_ADDRS_PER_INODE + 2)
+#define	NODE_IND1_BLOCK		(DEF_ADDRS_PER_INODE + 3)
+#define	NODE_IND2_BLOCK		(DEF_ADDRS_PER_INODE + 4)
+#define	NODE_DIND_BLOCK		(DEF_ADDRS_PER_INODE + 5)
+
+#define F2FS_INLINE_XATTR	0x01	/* file inline xattr flag */
+#define F2FS_INLINE_DATA	0x02	/* file inline data flag */
+
+#define MAX_INLINE_DATA		(sizeof(__le32) * (DEF_ADDRS_PER_INODE - \
+						F2FS_INLINE_XATTR_ADDRS - 1))
+
+#define INLINE_DATA_OFFSET	(PAGE_CACHE_SIZE - sizeof(struct node_footer) \
+			- sizeof(__le32) * (DEF_ADDRS_PER_INODE + 5 - 1))
 
 struct f2fs_inode {
 	__le16 i_mode;			/* file mode */
 	__u8 i_advise;			/* file hints */
-	__u8 i_reserved;		/* reserved */
+	__u8 i_inline;			/* file inline flags */
 	__le32 i_uid;			/* user ID */
 	__le32 i_gid;			/* group ID */
 	__le32 i_links;			/* links count */
@@ -166,11 +188,11 @@ struct f2fs_inode {
 	__le32 i_pino;			/* parent inode number */
 	__le32 i_namelen;		/* file name length */
 	__u8 i_name[F2FS_NAME_LEN];	/* file name for SPOR */
-	__u8 i_reserved2;		/* for backward compatibility */
+	__u8 i_dir_level;		/* dentry_level for large dir */
 
 	struct f2fs_extent i_ext;	/* caching a largest extent */
 
-	__le32 i_addr[ADDRS_PER_INODE];	/* Pointers to data blocks */
+	__le32 i_addr[DEF_ADDRS_PER_INODE];	/* Pointers to data blocks */
 
 	__le32 i_nid[5];		/* direct(2), indirect(2),
 						double_indirect(1) node id */
@@ -373,6 +395,9 @@ typedef __le32	f2fs_hash_t;
 
 /* MAX level for dir lookup */
 #define MAX_DIR_HASH_DEPTH	63
+
+/* MAX buckets in one level of dir */
+#define MAX_DIR_BUCKETS		(1 << ((MAX_DIR_HASH_DEPTH / 2) - 1))
 
 #define SIZE_OF_DIR_ENTRY	11	/* by byte */
 #define SIZE_OF_DENTRY_BITMAP	((NR_DENTRY_IN_BLOCK + BITS_PER_BYTE - 1) / \

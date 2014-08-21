@@ -13,9 +13,10 @@
 
 #include <drm/exynos_drm.h>
 #include "exynos_drm_drv.h"
-#include "exynos_drm_encoder.h"
+#include "exynos_drm_crtc.h"
 #include "exynos_drm_fb.h"
 #include "exynos_drm_gem.h"
+#include "exynos_drm_plane.h"
 
 #define to_exynos_plane(x)	container_of(x, struct exynos_plane, base)
 
@@ -86,7 +87,7 @@ int exynos_plane_mode_set(struct drm_plane *plane, struct drm_crtc *crtc,
 		struct exynos_drm_gem_buf *buffer = exynos_drm_fb_buffer(fb, i);
 
 		if (!buffer) {
-			DRM_LOG_KMS("buffer is null\n");
+			DRM_DEBUG_KMS("buffer is null\n");
 			return -EFAULT;
 		}
 
@@ -138,7 +139,7 @@ int exynos_plane_mode_set(struct drm_plane *plane, struct drm_crtc *crtc,
 			overlay->crtc_x, overlay->crtc_y,
 			overlay->crtc_width, overlay->crtc_height);
 
-	exynos_drm_fn_encoder(crtc, overlay, exynos_drm_encoder_plane_mode_set);
+	exynos_drm_crtc_plane_mode_set(crtc, overlay);
 
 	return 0;
 }
@@ -148,8 +149,7 @@ void exynos_plane_commit(struct drm_plane *plane)
 	struct exynos_plane *exynos_plane = to_exynos_plane(plane);
 	struct exynos_drm_overlay *overlay = &exynos_plane->overlay;
 
-	exynos_drm_fn_encoder(plane->crtc, &overlay->zpos,
-			exynos_drm_encoder_plane_commit);
+	exynos_drm_crtc_plane_commit(plane->crtc, overlay->zpos);
 }
 
 void exynos_plane_dpms(struct drm_plane *plane, int mode)
@@ -161,17 +161,13 @@ void exynos_plane_dpms(struct drm_plane *plane, int mode)
 		if (exynos_plane->enabled)
 			return;
 
-		exynos_drm_fn_encoder(plane->crtc, &overlay->zpos,
-				exynos_drm_encoder_plane_enable);
-
+		exynos_drm_crtc_plane_enable(plane->crtc, overlay->zpos);
 		exynos_plane->enabled = true;
 	} else {
 		if (!exynos_plane->enabled)
 			return;
 
-		exynos_drm_fn_encoder(plane->crtc, &overlay->zpos,
-				exynos_drm_encoder_plane_disable);
-
+		exynos_drm_crtc_plane_disable(plane->crtc, overlay->zpos);
 		exynos_plane->enabled = false;
 	}
 }
@@ -258,16 +254,14 @@ static void exynos_plane_attach_zpos_property(struct drm_plane *plane)
 }
 
 struct drm_plane *exynos_plane_init(struct drm_device *dev,
-				    unsigned int possible_crtcs, bool priv)
+				    unsigned long possible_crtcs, bool priv)
 {
 	struct exynos_plane *exynos_plane;
 	int err;
 
 	exynos_plane = kzalloc(sizeof(struct exynos_plane), GFP_KERNEL);
-	if (!exynos_plane) {
-		DRM_ERROR("failed to allocate plane\n");
+	if (!exynos_plane)
 		return NULL;
-	}
 
 	err = drm_plane_init(dev, &exynos_plane->base, possible_crtcs,
 			      &exynos_plane_funcs, formats, ARRAY_SIZE(formats),

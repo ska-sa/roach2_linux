@@ -315,7 +315,7 @@
         device_type = "fpga";
         xlnx,family = "virtex5";
         compatible = "kat,roach2-fpga";
-        reg = <0xd0000000 0x4000000>;
+        reg = <0xd0000000 0x8000000>;
       };
 
      R2CHASSIS: r2chassis {

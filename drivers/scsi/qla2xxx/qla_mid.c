@@ -1,6 +1,6 @@
 /*
  * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2013 QLogic Corporation
+ * Copyright (c)  2003-2014 QLogic Corporation
  *
  * See LICENSE.qla2xxx for copyright and licensing details.
  */
@@ -630,7 +630,7 @@ qla25xx_create_req_que(struct qla_hw_data *ha, uint16_t options,
 	struct req_que *req = NULL;
 	struct scsi_qla_host *base_vha = pci_get_drvdata(ha->pdev);
 	uint16_t que_id = 0;
-	device_reg_t __iomem *reg;
+	device_reg_t *reg;
 	uint32_t cnt;
 
 	req = kzalloc(sizeof(struct req_que), GFP_KERNEL);
@@ -699,6 +699,8 @@ qla25xx_create_req_que(struct qla_hw_data *ha, uint16_t options,
 	req->cnt = req->length;
 	req->id = que_id;
 	reg = ISP_QUE_REG(ha, que_id);
+	req->req_q_in = &reg->isp25mq.req_q_in;
+	req->req_q_out = &reg->isp25mq.req_q_out;
 	req->max_q_depth = ha->req_q_map[0]->max_q_depth;
 	mutex_unlock(&ha->vport_lock);
 	ql_dbg(ql_dbg_multiq, base_vha, 0xc004,
@@ -752,7 +754,7 @@ qla25xx_create_rsp_que(struct qla_hw_data *ha, uint16_t options,
 	struct rsp_que *rsp = NULL;
 	struct scsi_qla_host *base_vha = pci_get_drvdata(ha->pdev);
 	uint16_t que_id = 0;
-	device_reg_t __iomem *reg;
+	device_reg_t *reg;
 
 	rsp = kzalloc(sizeof(struct rsp_que), GFP_KERNEL);
 	if (rsp == NULL) {

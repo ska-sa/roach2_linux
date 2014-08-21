@@ -43,6 +43,7 @@ struct mmu_gather {
 	struct mm_struct	*mm;
 	unsigned int		fullmm;
 	struct vm_area_struct	*vma;
+	unsigned long		start, end;
 	unsigned long		range_start;
 	unsigned long		range_end;
 	unsigned int		nr;
@@ -97,20 +98,32 @@ static inline void __tlb_alloc_page(struct mmu_gather *tlb)
 	}
 }
 
-static inline void tlb_flush_mmu(struct mmu_gather *tlb)
+static inline void tlb_flush_mmu_tlbonly(struct mmu_gather *tlb)
 {
 	tlb_flush(tlb);
+}
+
+static inline void tlb_flush_mmu_free(struct mmu_gather *tlb)
+{
 	free_pages_and_swap_cache(tlb->pages, tlb->nr);
 	tlb->nr = 0;
 	if (tlb->pages == tlb->local)
 		__tlb_alloc_page(tlb);
 }
 
+static inline void tlb_flush_mmu(struct mmu_gather *tlb)
+{
+	tlb_flush_mmu_tlbonly(tlb);
+	tlb_flush_mmu_free(tlb);
+}
+
 static inline void
-tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm, unsigned int fullmm)
+tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm, unsigned long start, unsigned long end)
 {
 	tlb->mm = mm;
-	tlb->fullmm = fullmm;
+	tlb->fullmm = !(start | (end+1));
+	tlb->start = start;
+	tlb->end = end;
 	tlb->vma = NULL;
 	tlb->max = ARRAY_SIZE(tlb->local);
 	tlb->pages = tlb->local;

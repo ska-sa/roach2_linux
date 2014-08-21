@@ -185,7 +185,7 @@ static void sci_io_request_build_ssp_command_iu(struct isci_request *ireq)
 	cmd_iu->_r_c = 0;
 
 	sci_swab32_cpy(&cmd_iu->cdb, task->ssp_task.cmd->cmnd,
-		       task->ssp_task.cmd->cmd_len / sizeof(u32));
+		       (task->ssp_task.cmd->cmd_len+3) / sizeof(u32));
 }
 
 static void sci_task_request_build_ssp_task_iu(struct isci_request *ireq)
@@ -2723,13 +2723,9 @@ static void isci_process_stp_response(struct sas_task *task, struct dev_to_host_
 	memcpy(resp->ending_fis, fis, sizeof(*fis));
 	ts->buf_valid_size = sizeof(*resp);
 
-	/* If the device fault bit is set in the status register, then
-	 * set the sense data and return.
-	 */
-	if (fis->status & ATA_DF)
+	/* If an error is flagged let libata decode the fis */
+	if (ac_err_mask(fis->status))
 		ts->stat = SAS_PROTO_RESPONSE;
-	else if (fis->status & ATA_ERR)
-		ts->stat = SAM_STAT_CHECK_CONDITION;
 	else
 		ts->stat = SAM_STAT_GOOD;
 

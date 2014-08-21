@@ -43,8 +43,8 @@
 #define DEBUG_SUBSYSTEM S_CLASS
 
 #include <linux/module.h>
-#include <obd_class.h>
-#include <lustre/lustre_idl.h>
+#include "../../include/obd_class.h"
+#include "../../include/lustre/lustre_idl.h"
 
 #include <linux/fs.h>
 #include <linux/pagemap.h> /* for PAGE_CACHE_SIZE */
@@ -151,7 +151,7 @@ void obdo_refresh_inode(struct inode *dst, struct obdo *src, obd_flag valid)
 
 	if (valid & (OBD_MD_FLCTIME | OBD_MD_FLMTIME))
 		CDEBUG(D_INODE,
-		       "valid "LPX64", cur time %lu/%lu, new "LPU64"/"LPU64"\n",
+		       "valid %#llx, cur time %lu/%lu, new %llu/%llu\n",
 		       src->o_valid, LTIME_S(dst->i_mtime),
 		       LTIME_S(dst->i_ctime), src->o_mtime, src->o_ctime);
 
@@ -190,7 +190,7 @@ void obdo_to_inode(struct inode *dst, struct obdo *src, obd_flag valid)
 
 	if (valid & (OBD_MD_FLCTIME | OBD_MD_FLMTIME))
 		CDEBUG(D_INODE,
-		       "valid "LPX64", cur time %lu/%lu, new "LPU64"/"LPU64"\n",
+		       "valid %#llx, cur time %lu/%lu, new %llu/%llu\n",
 		       src->o_valid, LTIME_S(dst->i_mtime),
 		       LTIME_S(dst->i_ctime), src->o_mtime, src->o_ctime);
 
@@ -213,9 +213,9 @@ void obdo_to_inode(struct inode *dst, struct obdo *src, obd_flag valid)
 	if (valid & OBD_MD_FLMODE)
 		dst->i_mode = (dst->i_mode & S_IFMT) | (src->o_mode & ~S_IFMT);
 	if (valid & OBD_MD_FLUID)
-		dst->i_uid = src->o_uid;
+		dst->i_uid = make_kuid(&init_user_ns, src->o_uid);
 	if (valid & OBD_MD_FLGID)
-		dst->i_gid = src->o_gid;
+		dst->i_gid = make_kgid(&init_user_ns, src->o_gid);
 	if (valid & OBD_MD_FLFLAGS)
 		dst->i_flags = src->o_flags;
 }

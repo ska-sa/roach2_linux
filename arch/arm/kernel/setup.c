@@ -72,10 +72,13 @@ static int __init fpe_setup(char *line)
 __setup("fpe=", fpe_setup);
 #endif
 
-extern void paging_init(struct machine_desc *desc);
+extern void init_default_cache_policy(unsigned long);
+extern void paging_init(const struct machine_desc *desc);
+extern void early_paging_init(const struct machine_desc *,
+			      struct proc_info_list *);
 extern void sanity_check_meminfo(void);
 extern enum reboot_mode reboot_mode;
-extern void setup_dma_zone(struct machine_desc *desc);
+extern void setup_dma_zone(const struct machine_desc *desc);
 
 unsigned int processor_id;
 EXPORT_SYMBOL(processor_id);
@@ -97,6 +100,9 @@ EXPORT_SYMBOL(system_serial_high);
 
 unsigned int elf_hwcap __read_mostly;
 EXPORT_SYMBOL(elf_hwcap);
+
+unsigned int elf_hwcap2 __read_mostly;
+EXPORT_SYMBOL(elf_hwcap2);
 
 
 #ifdef MULTI_CPU
@@ -139,7 +145,7 @@ EXPORT_SYMBOL(elf_platform);
 static const char *cpu_name;
 static const char *machine_name;
 static char __initdata cmd_line[COMMAND_LINE_SIZE];
-struct machine_desc *machine_desc __initdata;
+const struct machine_desc *machine_desc __initdata;
 
 static union { char c[4]; unsigned long l; } endian_test __initdata = { { 'l', '?', '?', 'b' } };
 #define ENDIANNESS ((char)endian_test.l)
@@ -332,7 +338,7 @@ static void __init cacheid_init(void)
 		cacheid = CACHEID_VIVT;
 	}
 
-	printk("CPU: %s data cache, %s instruction cache\n",
+	pr_info("CPU: %s data cache, %s instruction cache\n",
 		cache_is_vivt() ? "VIVT" :
 		cache_is_vipt_aliasing() ? "VIPT aliasing" :
 		cache_is_vipt_nonaliasing() ? "PIPT / VIPT nonaliasing" : "unknown",
@@ -414,7 +420,7 @@ void notrace cpu_init(void)
 	struct stack *stk = &stacks[cpu];
 
 	if (cpu >= NR_CPUS) {
-		printk(KERN_CRIT "CPU%u: bad primary CPU number\n", cpu);
+		pr_crit("CPU%u: bad primary CPU number\n", cpu);
 		BUG();
 	}
 
@@ -482,7 +488,7 @@ void __init smp_setup_processor_id(void)
 	 */
 	set_my_cpu_offset(0);
 
-	printk(KERN_INFO "Booting Linux on physical CPU 0x%x\n", mpidr);
+	pr_info("Booting Linux on physical CPU 0x%x\n", mpidr);
 }
 
 struct mpidr_hash mpidr_hash;
@@ -562,8 +568,8 @@ static void __init setup_processor(void)
 	 */
 	list = lookup_processor_type(read_cpuid_id());
 	if (!list) {
-		printk("CPU configuration botched (ID %08x), unable "
-		       "to continue.\n", read_cpuid_id());
+		pr_err("CPU configuration botched (ID %08x), unable to continue.\n",
+		       read_cpuid_id());
 		while (1);
 	}
 
@@ -583,9 +589,9 @@ static void __init setup_processor(void)
 	cpu_cache = *list->cache;
 #endif
 
-	printk("CPU: %s [%08x] revision %d (ARMv%s), cr=%08lx\n",
-	       cpu_name, read_cpuid_id(), read_cpuid_id() & 15,
-	       proc_arch[cpu_architecture()], cr_alignment);
+	pr_info("CPU: %s [%08x] revision %d (ARMv%s), cr=%08lx\n",
+		cpu_name, read_cpuid_id(), read_cpuid_id() & 15,
+		proc_arch[cpu_architecture()], get_cr());
 
 	snprintf(init_utsname()->machine, __NEW_UTS_LEN + 1, "%s%c",
 		 list->arch_name, ENDIANNESS);
@@ -598,6 +604,10 @@ static void __init setup_processor(void)
 #ifndef CONFIG_ARM_THUMB
 	elf_hwcap &= ~(HWCAP_THUMB | HWCAP_IDIVT);
 #endif
+#ifdef CONFIG_MMU
+	init_default_cache_policy(list->__cpu_mm_mmu_flags);
+#endif
+	erratum_a15_798181_init();
 
 	feat_v6_fixup();
 
@@ -607,7 +617,7 @@ static void __init setup_processor(void)
 
 void __init dump_machine_table(void)
 {
-	struct machine_desc *p;
+	const struct machine_desc *p;
 
 	early_print("Available machine support:\n\nID (hex)\tNAME\n");
 	for_each_machine_desc(p)
@@ -619,46 +629,61 @@ void __init dump_machine_table(void)
 		/* can't use cpu_relax() here as it may require MMU setup */;
 }
 
-int __init arm_add_memory(phys_addr_t start, phys_addr_t size)
+int __init arm_add_memory(u64 start, u64 size)
 {
-	struct membank *bank = &meminfo.bank[meminfo.nr_banks];
-
-	if (meminfo.nr_banks >= NR_BANKS) {
-		printk(KERN_CRIT "NR_BANKS too low, "
-			"ignoring memory at 0x%08llx\n", (long long)start);
-		return -EINVAL;
-	}
+	u64 aligned_start;
 
 	/*
 	 * Ensure that start/size are aligned to a page boundary.
 	 * Size is appropriately rounded down, start is rounded up.
 	 */
 	size -= start & ~PAGE_MASK;
-	bank->start = PAGE_ALIGN(start);
+	aligned_start = PAGE_ALIGN(start);
 
-#ifndef CONFIG_ARM_LPAE
-	if (bank->start + size < bank->start) {
-		printk(KERN_CRIT "Truncating memory at 0x%08llx to fit in "
-			"32-bit physical address space\n", (long long)start);
+#ifndef CONFIG_ARCH_PHYS_ADDR_T_64BIT
+	if (aligned_start > ULONG_MAX) {
+		pr_crit("Ignoring memory at 0x%08llx outside 32-bit physical address space\n",
+			(long long)start);
+		return -EINVAL;
+	}
+
+	if (aligned_start + size > ULONG_MAX) {
+		pr_crit("Truncating memory at 0x%08llx to fit in 32-bit physical address space\n",
+			(long long)start);
 		/*
 		 * To ensure bank->start + bank->size is representable in
 		 * 32 bits, we use ULONG_MAX as the upper limit rather than 4GB.
 		 * This means we lose a page after masking.
 		 */
-		size = ULONG_MAX - bank->start;
+		size = ULONG_MAX - aligned_start;
 	}
 #endif
 
-	bank->size = size & ~(phys_addr_t)(PAGE_SIZE - 1);
+	if (aligned_start < PHYS_OFFSET) {
+		if (aligned_start + size <= PHYS_OFFSET) {
+			pr_info("Ignoring memory below PHYS_OFFSET: 0x%08llx-0x%08llx\n",
+				aligned_start, aligned_start + size);
+			return -EINVAL;
+		}
+
+		pr_info("Ignoring memory below PHYS_OFFSET: 0x%08llx-0x%08llx\n",
+			aligned_start, (u64)PHYS_OFFSET);
+
+		size -= PHYS_OFFSET - aligned_start;
+		aligned_start = PHYS_OFFSET;
+	}
+
+	start = aligned_start;
+	size = size & ~(phys_addr_t)(PAGE_SIZE - 1);
 
 	/*
 	 * Check whether this memory region has non-zero size or
 	 * invalid node number.
 	 */
-	if (bank->size == 0)
+	if (size == 0)
 		return -EINVAL;
 
-	meminfo.nr_banks++;
+	memblock_add(start, size);
 	return 0;
 }
 
@@ -666,11 +691,12 @@ int __init arm_add_memory(phys_addr_t start, phys_addr_t size)
  * Pick out the memory size.  We look for mem=size@start,
  * where start and size are "size[KkMm]"
  */
+
 static int __init early_mem(char *p)
 {
 	static int usermem __initdata = 0;
-	phys_addr_t size;
-	phys_addr_t start;
+	u64 size;
+	u64 start;
 	char *endp;
 
 	/*
@@ -680,7 +706,8 @@ static int __init early_mem(char *p)
 	 */
 	if (usermem == 0) {
 		usermem = 1;
-		meminfo.nr_banks = 0;
+		memblock_remove(memblock_start_of_DRAM(),
+			memblock_end_of_DRAM() - memblock_start_of_DRAM());
 	}
 
 	start = PHYS_OFFSET;
@@ -694,7 +721,7 @@ static int __init early_mem(char *p)
 }
 early_param("mem", early_mem);
 
-static void __init request_standard_resources(struct machine_desc *mdesc)
+static void __init request_standard_resources(const struct machine_desc *mdesc)
 {
 	struct memblock_region *region;
 	struct resource *res;
@@ -705,7 +732,7 @@ static void __init request_standard_resources(struct machine_desc *mdesc)
 	kernel_data.end     = virt_to_phys(_end - 1);
 
 	for_each_memblock(memory, region) {
-		res = alloc_bootmem_low(sizeof(*res));
+		res = memblock_virt_alloc(sizeof(*res), 0);
 		res->name  = "System RAM";
 		res->start = __pfn_to_phys(memblock_region_memory_base_pfn(region));
 		res->end = __pfn_to_phys(memblock_region_memory_end_pfn(region)) - 1;
@@ -805,18 +832,17 @@ static void __init reserve_crashkernel(void)
 	if (ret)
 		return;
 
-	ret = reserve_bootmem(crash_base, crash_size, BOOTMEM_EXCLUSIVE);
+	ret = memblock_reserve(crash_base, crash_size);
 	if (ret < 0) {
-		printk(KERN_WARNING "crashkernel reservation failed - "
-		       "memory is in use (0x%lx)\n", (unsigned long)crash_base);
+		pr_warn("crashkernel reservation failed - memory is in use (0x%lx)\n",
+			(unsigned long)crash_base);
 		return;
 	}
 
-	printk(KERN_INFO "Reserving %ldMB of memory at %ldMB "
-	       "for crashkernel (System RAM: %ldMB)\n",
-	       (unsigned long)(crash_size >> 20),
-	       (unsigned long)(crash_base >> 20),
-	       (unsigned long)(total_mem >> 20));
+	pr_info("Reserving %ldMB of memory at %ldMB for crashkernel (System RAM: %ldMB)\n",
+		(unsigned long)(crash_size >> 20),
+		(unsigned long)(crash_base >> 20),
+		(unsigned long)(total_mem >> 20));
 
 	crashk_res.start = crash_base;
 	crashk_res.end = crash_base + crash_size - 1;
@@ -826,16 +852,11 @@ static void __init reserve_crashkernel(void)
 static inline void reserve_crashkernel(void) {}
 #endif /* CONFIG_KEXEC */
 
-static int __init meminfo_cmp(const void *_a, const void *_b)
-{
-	const struct membank *a = _a, *b = _b;
-	long cmp = bank_pfn_start(a) - bank_pfn_start(b);
-	return cmp < 0 ? -1 : cmp > 0 ? 1 : 0;
-}
-
 void __init hyp_mode_check(void)
 {
 #ifdef CONFIG_ARM_VIRT_EXT
+	sync_boot_mode();
+
 	if (is_hyp_mode_available()) {
 		pr_info("CPU: All CPU(s) started in HYP mode.\n");
 		pr_info("CPU: Virtualization extensions available.\n");
@@ -850,7 +871,7 @@ void __init hyp_mode_check(void)
 
 void __init setup_arch(char **cmdline_p)
 {
-	struct machine_desc *mdesc;
+	const struct machine_desc *mdesc;
 
 	setup_processor();
 	mdesc = setup_machine_fdt(__atags_pointer);
@@ -858,8 +879,6 @@ void __init setup_arch(char **cmdline_p)
 		mdesc = setup_machine_tags(__atags_pointer, __machine_arch_type);
 	machine_desc = mdesc;
 	machine_name = mdesc->name;
-
-	setup_dma_zone(mdesc);
 
 	if (mdesc->reboot_mode != REBOOT_HARD)
 		reboot_mode = mdesc->reboot_mode;
@@ -875,9 +894,10 @@ void __init setup_arch(char **cmdline_p)
 
 	parse_early_param();
 
-	sort(&meminfo.bank, meminfo.nr_banks, sizeof(meminfo.bank[0]), meminfo_cmp, NULL);
+	early_paging_init(mdesc, lookup_processor_type(read_cpuid_id()));
+	setup_dma_zone(mdesc);
 	sanity_check_meminfo();
-	arm_memblock_init(&meminfo, mdesc);
+	arm_memblock_init(mdesc);
 
 	paging_init(mdesc);
 	request_standard_resources(mdesc);
@@ -971,7 +991,18 @@ static const char *hwcap_str[] = {
 	"vfpv4",
 	"idiva",
 	"idivt",
+	"vfpd32",
 	"lpae",
+	"evtstrm",
+	NULL
+};
+
+static const char *hwcap2_str[] = {
+	"aes",
+	"pmull",
+	"sha1",
+	"sha2",
+	"crc32",
 	NULL
 };
 
@@ -991,21 +1022,16 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "model name\t: %s rev %d (%s)\n",
 			   cpu_name, cpuid & 15, elf_platform);
 
-#if defined(CONFIG_SMP)
-		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
-			   per_cpu(cpu_data, i).loops_per_jiffy / (500000UL/HZ),
-			   (per_cpu(cpu_data, i).loops_per_jiffy / (5000UL/HZ)) % 100);
-#else
-		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
-			   loops_per_jiffy / (500000/HZ),
-			   (loops_per_jiffy / (5000/HZ)) % 100);
-#endif
 		/* dump out the processor features */
 		seq_puts(m, "Features\t: ");
 
 		for (j = 0; hwcap_str[j]; j++)
 			if (elf_hwcap & (1 << j))
 				seq_printf(m, "%s ", hwcap_str[j]);
+
+		for (j = 0; hwcap2_str[j]; j++)
+			if (elf_hwcap2 & (1 << j))
+				seq_printf(m, "%s ", hwcap2_str[j]);
 
 		seq_printf(m, "\nCPU implementer\t: 0x%02x\n", cpuid >> 24);
 		seq_printf(m, "CPU architecture: %s\n",

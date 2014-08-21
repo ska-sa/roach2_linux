@@ -132,7 +132,7 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 		else
 			pv = br_get_vlan_info(br);
 
-		if (!pv || bitmap_empty(pv->vlan_bitmap, BR_VLAN_BITMAP_LEN))
+		if (!pv || bitmap_empty(pv->vlan_bitmap, VLAN_N_VID))
 			goto done;
 
 		af = nla_nest_start(skb, IFLA_AF_SPEC);
@@ -140,7 +140,7 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 			goto nla_put_failure;
 
 		pvid = br_get_pvid(pv);
-		for_each_set_bit(vid, pv->vlan_bitmap, BR_VLAN_BITMAP_LEN) {
+		for_each_set_bit(vid, pv->vlan_bitmap, VLAN_N_VID) {
 			vinfo.vid = vid;
 			vinfo.flags = 0;
 			if (vid == pvid)
@@ -195,8 +195,7 @@ void br_ifinfo_notify(int event, struct net_bridge_port *port)
 	rtnl_notify(skb, net, 0, RTNLGRP_LINK, NULL, GFP_ATOMIC);
 	return;
 errout:
-	if (err < 0)
-		rtnl_set_sk_err(net, RTNLGRP_LINK, err);
+	rtnl_set_sk_err(net, RTNLGRP_LINK, err);
 }
 
 
@@ -207,7 +206,7 @@ int br_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	       struct net_device *dev, u32 filter_mask)
 {
 	int err = 0;
-	struct net_bridge_port *port = br_port_get_rcu(dev);
+	struct net_bridge_port *port = br_port_get_rtnl(dev);
 
 	/* not a bridge port and  */
 	if (!port && !(filter_mask & RTEXT_FILTER_BRVLAN))
@@ -243,7 +242,7 @@ static int br_afspec(struct net_bridge *br,
 
 		vinfo = nla_data(tb[IFLA_BRIDGE_VLAN_INFO]);
 
-		if (vinfo->vid >= VLAN_N_VID)
+		if (!vinfo->vid || vinfo->vid >= VLAN_VID_MASK)
 			return -EINVAL;
 
 		switch (cmd) {
@@ -329,6 +328,7 @@ static void br_set_port_flag(struct net_bridge_port *p, struct nlattr *tb[],
 static int br_setport(struct net_bridge_port *p, struct nlattr *tb[])
 {
 	int err;
+	unsigned long old_flags = p->flags;
 
 	br_set_port_flag(p, tb, IFLA_BRPORT_MODE, BR_HAIRPIN_MODE);
 	br_set_port_flag(p, tb, IFLA_BRPORT_GUARD, BR_BPDU_GUARD);
@@ -354,6 +354,8 @@ static int br_setport(struct net_bridge_port *p, struct nlattr *tb[])
 		if (err)
 			return err;
 	}
+
+	br_port_flags_change(p, old_flags ^ p->flags);
 	return 0;
 }
 
@@ -373,7 +375,7 @@ int br_setlink(struct net_device *dev, struct nlmsghdr *nlh)
 
 	p = br_port_get_rtnl(dev);
 	/* We want to accept dev as bridge itself if the AF_SPEC
-	 * is set to see if someone is setting vlan info on the brigde
+	 * is set to see if someone is setting vlan info on the bridge
 	 */
 	if (!p && !afspec)
 		return -EINVAL;
@@ -389,7 +391,7 @@ int br_setlink(struct net_device *dev, struct nlmsghdr *nlh)
 			err = br_setport(p, tb);
 			spin_unlock_bh(&p->br->lock);
 		} else {
-			/* Binary compatability with old RSTP */
+			/* Binary compatibility with old RSTP */
 			if (nla_len(protinfo) < sizeof(u8))
 				return -EINVAL;
 
@@ -446,12 +448,26 @@ static int br_validate(struct nlattr *tb[], struct nlattr *data[])
 	return 0;
 }
 
+static int br_dev_newlink(struct net *src_net, struct net_device *dev,
+			  struct nlattr *tb[], struct nlattr *data[])
+{
+	struct net_bridge *br = netdev_priv(dev);
+
+	if (tb[IFLA_ADDRESS]) {
+		spin_lock_bh(&br->lock);
+		br_stp_change_bridge_id(br, nla_data(tb[IFLA_ADDRESS]));
+		spin_unlock_bh(&br->lock);
+	}
+
+	return register_netdevice(dev);
+}
+
 static size_t br_get_link_af_size(const struct net_device *dev)
 {
 	struct net_port_vlans *pv;
 
 	if (br_port_exists(dev))
-		pv = nbp_get_vlan_info(br_port_get_rcu(dev));
+		pv = nbp_get_vlan_info(br_port_get_rtnl(dev));
 	else if (dev->priv_flags & IFF_EBRIDGE)
 		pv = br_get_vlan_info((struct net_bridge *)netdev_priv(dev));
 	else
@@ -474,6 +490,7 @@ struct rtnl_link_ops br_link_ops __read_mostly = {
 	.priv_size	= sizeof(struct net_bridge),
 	.setup		= br_dev_setup,
 	.validate	= br_validate,
+	.newlink	= br_dev_newlink,
 	.dellink	= br_dev_delete,
 };
 
@@ -482,9 +499,7 @@ int __init br_netlink_init(void)
 	int err;
 
 	br_mdb_init();
-	err = rtnl_af_register(&br_af_ops);
-	if (err)
-		goto out;
+	rtnl_af_register(&br_af_ops);
 
 	err = rtnl_link_register(&br_link_ops);
 	if (err)
@@ -494,7 +509,6 @@ int __init br_netlink_init(void)
 
 out_af:
 	rtnl_af_unregister(&br_af_ops);
-out:
 	br_mdb_uninit();
 	return err;
 }

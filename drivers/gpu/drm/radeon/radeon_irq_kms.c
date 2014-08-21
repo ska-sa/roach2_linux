@@ -32,23 +32,29 @@
 #include "radeon.h"
 #include "atom.h"
 
+#include <linux/pm_runtime.h>
+
 #define RADEON_WAIT_IDLE_TIMEOUT 200
 
 /**
  * radeon_driver_irq_handler_kms - irq handler for KMS
  *
- * @DRM_IRQ_ARGS: args
+ * @int irq, void *arg: args
  *
  * This is the irq handler for the radeon KMS driver (all asics).
  * radeon_irq_process is a macro that points to the per-asic
  * irq handler callback.
  */
-irqreturn_t radeon_driver_irq_handler_kms(DRM_IRQ_ARGS)
+irqreturn_t radeon_driver_irq_handler_kms(int irq, void *arg)
 {
 	struct drm_device *dev = (struct drm_device *) arg;
 	struct radeon_device *rdev = dev->dev_private;
+	irqreturn_t ret;
 
-	return radeon_irq_process(rdev);
+	ret = radeon_irq_process(rdev);
+	if (ret == IRQ_HANDLED)
+		pm_runtime_mark_last_busy(dev->dev);
+	return ret;
 }
 
 /*
@@ -260,10 +266,6 @@ int radeon_irq_kms_init(struct radeon_device *rdev)
 {
 	int r = 0;
 
-	INIT_WORK(&rdev->hotplug_work, radeon_hotplug_work_func);
-	INIT_WORK(&rdev->audio_work, r600_audio_update_hdmi);
-	INIT_WORK(&rdev->reset_work, radeon_irq_reset_work_func);
-
 	spin_lock_init(&rdev->irq.lock);
 	r = drm_vblank_init(rdev->ddev, rdev->num_crtc);
 	if (r) {
@@ -279,12 +281,19 @@ int radeon_irq_kms_init(struct radeon_device *rdev)
 			dev_info(rdev->dev, "radeon: using MSI.\n");
 		}
 	}
+
+	INIT_WORK(&rdev->hotplug_work, radeon_hotplug_work_func);
+	INIT_WORK(&rdev->audio_work, r600_audio_update_hdmi);
+	INIT_WORK(&rdev->reset_work, radeon_irq_reset_work_func);
+
 	rdev->irq.installed = true;
-	r = drm_irq_install(rdev->ddev);
+	r = drm_irq_install(rdev->ddev, rdev->ddev->pdev->irq);
 	if (r) {
 		rdev->irq.installed = false;
+		flush_work(&rdev->hotplug_work);
 		return r;
 	}
+
 	DRM_INFO("radeon: irq initialized.\n");
 	return 0;
 }
@@ -304,8 +313,8 @@ void radeon_irq_kms_fini(struct radeon_device *rdev)
 		rdev->irq.installed = false;
 		if (rdev->msi_enabled)
 			pci_disable_msi(rdev->pdev);
+		flush_work(&rdev->hotplug_work);
 	}
-	flush_work(&rdev->hotplug_work);
 }
 
 /**

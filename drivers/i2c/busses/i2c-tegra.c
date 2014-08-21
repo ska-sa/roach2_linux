@@ -25,10 +25,9 @@
 #include <linux/interrupt.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/of_i2c.h>
 #include <linux/of_device.h>
 #include <linux/module.h>
-#include <linux/clk/tegra.h>
+#include <linux/reset.h>
 
 #include <asm/unaligned.h>
 
@@ -161,6 +160,7 @@ struct tegra_i2c_dev {
 	struct i2c_adapter adapter;
 	struct clk *div_clk;
 	struct clk *fast_clk;
+	struct reset_control *rst;
 	void __iomem *base;
 	int cont_id;
 	int irq;
@@ -416,9 +416,9 @@ static int tegra_i2c_init(struct tegra_i2c_dev *i2c_dev)
 		return err;
 	}
 
-	tegra_periph_reset_assert(i2c_dev->div_clk);
+	reset_control_assert(i2c_dev->rst);
 	udelay(2);
-	tegra_periph_reset_deassert(i2c_dev->div_clk);
+	reset_control_deassert(i2c_dev->rst);
 
 	if (i2c_dev->is_dvc)
 		tegra_dvc_init(i2c_dev);
@@ -545,7 +545,7 @@ static int tegra_i2c_xfer_msg(struct tegra_i2c_dev *i2c_dev,
 	i2c_dev->msg_buf_remaining = msg->len;
 	i2c_dev->msg_err = I2C_ERR_NONE;
 	i2c_dev->msg_read = (msg->flags & I2C_M_RD);
-	INIT_COMPLETION(i2c_dev->msg_complete);
+	reinit_completion(&i2c_dev->msg_complete);
 
 	packet_header = (0 << PACKET_HEADER0_HEADER_SIZE_SHIFT) |
 			PACKET_HEADER0_PROTOCOL_I2C |
@@ -732,10 +732,8 @@ static int tegra_i2c_probe(struct platform_device *pdev)
 	}
 
 	i2c_dev = devm_kzalloc(&pdev->dev, sizeof(*i2c_dev), GFP_KERNEL);
-	if (!i2c_dev) {
-		dev_err(&pdev->dev, "Could not allocate struct tegra_i2c_dev");
+	if (!i2c_dev)
 		return -ENOMEM;
-	}
 
 	i2c_dev->base = base;
 	i2c_dev->div_clk = div_clk;
@@ -743,6 +741,12 @@ static int tegra_i2c_probe(struct platform_device *pdev)
 	i2c_dev->irq = irq;
 	i2c_dev->cont_id = pdev->id;
 	i2c_dev->dev = &pdev->dev;
+
+	i2c_dev->rst = devm_reset_control_get(&pdev->dev, "i2c");
+	if (IS_ERR(i2c_dev->rst)) {
+		dev_err(&pdev->dev, "missing controller reset");
+		return PTR_ERR(i2c_dev->rst);
+	}
 
 	ret = of_property_read_u32(i2c_dev->dev->of_node, "clock-frequency",
 					&i2c_dev->bus_clk_rate);
@@ -788,7 +792,7 @@ static int tegra_i2c_probe(struct platform_device *pdev)
 
 	i2c_set_adapdata(&i2c_dev->adapter, i2c_dev);
 	i2c_dev->adapter.owner = THIS_MODULE;
-	i2c_dev->adapter.class = I2C_CLASS_HWMON;
+	i2c_dev->adapter.class = I2C_CLASS_HWMON | I2C_CLASS_DEPRECATED;
 	strlcpy(i2c_dev->adapter.name, "Tegra I2C adapter",
 		sizeof(i2c_dev->adapter.name));
 	i2c_dev->adapter.algo = &tegra_i2c_algo;
@@ -801,8 +805,6 @@ static int tegra_i2c_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to add I2C adapter\n");
 		return ret;
 	}
-
-	of_i2c_register_devices(&i2c_dev->adapter);
 
 	return 0;
 }

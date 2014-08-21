@@ -43,13 +43,13 @@
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include <obd.h>
-#include <dt_object.h>
+#include "../include/obd.h"
+#include "../include/dt_object.h"
 #include <linux/list.h>
 /* fid_be_to_cpu() */
-#include <lustre_fid.h>
+#include "../include/lustre_fid.h"
 
-#include <lustre_quota.h>
+#include "../include/lustre_quota.h"
 
 /* context key constructor/destructor: dt_global_key_init, dt_global_key_fini */
 LU_KEY_INIT(dt_global, struct dt_thread_info);
@@ -219,7 +219,6 @@ struct dt_object *dt_locate_at(const struct lu_env *env,
 			       struct lu_device *top_dev)
 {
 	struct lu_object *lo, *n;
-	ENTRY;
 
 	lo = lu_object_find_at(env, top_dev, fid, NULL);
 	if (IS_ERR(lo))
@@ -376,15 +375,13 @@ struct dt_object *dt_find_or_create(const struct lu_env *env,
 	struct thandle *th;
 	int rc;
 
-	ENTRY;
-
 	dto = dt_locate(env, dt, fid);
 	if (IS_ERR(dto))
-		RETURN(dto);
+		return dto;
 
 	LASSERT(dto != NULL);
 	if (dt_object_exists(dto))
-		RETURN(dto);
+		return dto;
 
 	th = dt_trans_create(env, dt);
 	if (IS_ERR(th))
@@ -415,9 +412,9 @@ trans_stop:
 out:
 	if (rc) {
 		lu_object_put(env, &dto->do_lu);
-		RETURN(ERR_PTR(rc));
+		return ERR_PTR(rc);
 	}
-	RETURN(dto);
+	return dto;
 }
 EXPORT_SYMBOL(dt_find_or_create);
 
@@ -659,7 +656,6 @@ static int dt_index_page_build(const struct lu_env *env, union lu_page *lp,
 	struct lu_idxpage	*lip = &lp->lp_idx;
 	char			*entry;
 	int			 rc, size;
-	ENTRY;
 
 	/* no support for variable key & record size for now */
 	LASSERT((ii->ii_flags & II_FL_VARKEY) == 0);
@@ -763,21 +759,20 @@ int dt_index_walk(const struct lu_env *env, struct dt_object *obj,
 	const struct dt_it_ops	*iops;
 	unsigned int		 pageidx, nob, nlupgs = 0;
 	int			 rc;
-	ENTRY;
 
 	LASSERT(rdpg->rp_pages != NULL);
 	LASSERT(obj->do_index_ops != NULL);
 
 	nob = rdpg->rp_count;
 	if (nob <= 0)
-		RETURN(-EFAULT);
+		return -EFAULT;
 
 	/* Iterate through index and fill containers from @rdpg */
 	iops = &obj->do_index_ops->dio_it;
 	LASSERT(iops != NULL);
 	it = iops->init(env, obj, rdpg->rp_attrs, BYPASS_CAPA);
 	if (IS_ERR(it))
-		RETURN(PTR_ERR(it));
+		return PTR_ERR(it);
 
 	rc = iops->load(env, it, rdpg->rp_hash);
 	if (rc == 0) {
@@ -831,7 +826,7 @@ int dt_index_walk(const struct lu_env *env, struct dt_object *obj,
 	if (rc >= 0)
 		rc = min_t(unsigned int, nlupgs * LU_PAGE_SIZE, rdpg->rp_count);
 
-	RETURN(rc);
+	return rc;
 }
 EXPORT_SYMBOL(dt_index_walk);
 
@@ -855,26 +850,25 @@ int dt_index_read(const struct lu_env *env, struct dt_device *dev,
 	const struct dt_index_features	*feat;
 	struct dt_object		*obj;
 	int				 rc;
-	ENTRY;
 
 	/* rp_count shouldn't be null and should be a multiple of the container
 	 * size */
 	if (rdpg->rp_count <= 0 && (rdpg->rp_count & (LU_PAGE_SIZE - 1)) != 0)
-		RETURN(-EFAULT);
+		return -EFAULT;
 
 	if (fid_seq(&ii->ii_fid) >= FID_SEQ_NORMAL)
 		/* we don't support directory transfer via OBD_IDX_READ for the
 		 * time being */
-		RETURN(-EOPNOTSUPP);
+		return -EOPNOTSUPP;
 
 	if (!fid_is_quota(&ii->ii_fid))
 		/* block access to all local files except quota files */
-		RETURN(-EPERM);
+		return -EPERM;
 
 	/* lookup index object subject to the transfer */
 	obj = dt_locate(env, dev, &ii->ii_fid);
 	if (IS_ERR(obj))
-		RETURN(PTR_ERR(obj));
+		return PTR_ERR(obj);
 	if (dt_object_exists(obj) == 0)
 		GOTO(out, rc = -ENOENT);
 
@@ -935,7 +929,7 @@ out:
 }
 EXPORT_SYMBOL(dt_index_read);
 
-#ifdef LPROCFS
+#if defined (CONFIG_PROC_FS)
 
 int lprocfs_dt_rd_blksize(char *page, char **start, off_t off,
 			  int count, int *eof, void *data)
@@ -969,7 +963,7 @@ int lprocfs_dt_rd_kbytestotal(char *page, char **start, off_t off,
 			result <<= 1;
 
 		*eof = 1;
-		rc = snprintf(page, count, LPU64"\n", result);
+		rc = snprintf(page, count, "%llu\n", result);
 	}
 
 	return rc;
@@ -991,7 +985,7 @@ int lprocfs_dt_rd_kbytesfree(char *page, char **start, off_t off,
 			result <<= 1;
 
 		*eof = 1;
-		rc = snprintf(page, count, LPU64"\n", result);
+		rc = snprintf(page, count, "%llu\n", result);
 	}
 
 	return rc;
@@ -1013,7 +1007,7 @@ int lprocfs_dt_rd_kbytesavail(char *page, char **start, off_t off,
 			result <<= 1;
 
 		*eof = 1;
-		rc = snprintf(page, count, LPU64"\n", result);
+		rc = snprintf(page, count, "%llu\n", result);
 	}
 
 	return rc;
@@ -1029,7 +1023,7 @@ int lprocfs_dt_rd_filestotal(char *page, char **start, off_t off,
 	int rc = dt_statfs(NULL, dt, &osfs);
 	if (rc == 0) {
 		*eof = 1;
-		rc = snprintf(page, count, LPU64"\n", osfs.os_files);
+		rc = snprintf(page, count, "%llu\n", osfs.os_files);
 	}
 
 	return rc;
@@ -1045,11 +1039,11 @@ int lprocfs_dt_rd_filesfree(char *page, char **start, off_t off,
 	int rc = dt_statfs(NULL, dt, &osfs);
 	if (rc == 0) {
 		*eof = 1;
-		rc = snprintf(page, count, LPU64"\n", osfs.os_ffree);
+		rc = snprintf(page, count, "%llu\n", osfs.os_ffree);
 	}
 
 	return rc;
 }
 EXPORT_SYMBOL(lprocfs_dt_rd_filesfree);
 
-#endif /* LPROCFS */
+#endif /* CONFIG_PROC_FS */

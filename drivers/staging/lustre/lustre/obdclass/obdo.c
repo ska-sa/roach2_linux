@@ -42,8 +42,8 @@
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include <obd_class.h>
-#include <lustre/lustre_idl.h>
+#include "../include/obd_class.h"
+#include "../include/lustre/lustre_idl.h"
 
 void obdo_set_parent_fid(struct obdo *dst, const struct lu_fid *parent)
 {
@@ -100,11 +100,11 @@ void obdo_from_inode(struct obdo *dst, struct inode *src, obd_flag valid)
 		newvalid |= OBD_MD_FLMODE;
 	}
 	if (valid & OBD_MD_FLUID) {
-		dst->o_uid = src->i_uid;
+		dst->o_uid = from_kuid(&init_user_ns, src->i_uid);
 		newvalid |= OBD_MD_FLUID;
 	}
 	if (valid & OBD_MD_FLGID) {
-		dst->o_gid = src->i_gid;
+		dst->o_gid = from_kgid(&init_user_ns, src->i_gid);
 		newvalid |= OBD_MD_FLGID;
 	}
 	if (valid & OBD_MD_FLFLAGS) {
@@ -117,7 +117,7 @@ EXPORT_SYMBOL(obdo_from_inode);
 
 void obdo_cpy_md(struct obdo *dst, struct obdo *src, obd_flag valid)
 {
-	CDEBUG(D_INODE, "src obdo "DOSTID" valid "LPX64", dst obdo "DOSTID"\n",
+	CDEBUG(D_INODE, "src obdo "DOSTID" valid %#llx, dst obdo "DOSTID"\n",
 	       POSTID(&src->o_oi), src->o_valid, POSTID(&dst->o_oi));
 	if (valid & OBD_MD_FLATIME)
 		dst->o_atime = src->o_atime;
@@ -191,7 +191,7 @@ int obdo_cmp_md(struct obdo *dst, struct obdo *src, obd_flag compare)
 	}
 	if ( compare & OBD_MD_FLGENER )
 		res = (res || (dst->o_parent_oid != src->o_parent_oid));
-	/* XXX Don't know if thses should be included here - wasn't previously
+	/* XXX Don't know if these should be included here - wasn't previously
 	if ( compare & OBD_MD_FLINLINE )
 		res = (res || memcmp(dst->o_inline, src->o_inline));
 	*/
@@ -232,16 +232,16 @@ void obdo_from_iattr(struct obdo *oa, struct iattr *attr, unsigned int ia_valid)
 	if (ia_valid & ATTR_MODE) {
 		oa->o_mode = attr->ia_mode;
 		oa->o_valid |= OBD_MD_FLTYPE | OBD_MD_FLMODE;
-		if (!current_is_in_group(oa->o_gid) &&
-		    !cfs_capable(CFS_CAP_FSETID))
+		if (!in_group_p(make_kgid(&init_user_ns, oa->o_gid)) &&
+		    !capable(CFS_CAP_FSETID))
 			oa->o_mode &= ~S_ISGID;
 	}
 	if (ia_valid & ATTR_UID) {
-		oa->o_uid = attr->ia_uid;
+		oa->o_uid = from_kuid(&init_user_ns, attr->ia_uid);
 		oa->o_valid |= OBD_MD_FLUID;
 	}
 	if (ia_valid & ATTR_GID) {
-		oa->o_gid = attr->ia_gid;
+		oa->o_gid = from_kgid(&init_user_ns, attr->ia_gid);
 		oa->o_valid |= OBD_MD_FLGID;
 	}
 }
@@ -252,7 +252,7 @@ void iattr_from_obdo(struct iattr *attr, struct obdo *oa, obd_flag valid)
 	valid &= oa->o_valid;
 
 	if (valid & (OBD_MD_FLCTIME | OBD_MD_FLMTIME))
-		CDEBUG(D_INODE, "valid "LPX64", new time "LPU64"/"LPU64"\n",
+		CDEBUG(D_INODE, "valid %#llx, new time %llu/%llu\n",
 		       oa->o_valid, oa->o_mtime, oa->o_ctime);
 
 	attr->ia_valid = 0;
@@ -281,16 +281,16 @@ void iattr_from_obdo(struct iattr *attr, struct obdo *oa, obd_flag valid)
 	if (valid & OBD_MD_FLMODE) {
 		attr->ia_mode = (attr->ia_mode & S_IFMT)|(oa->o_mode & ~S_IFMT);
 		attr->ia_valid |= ATTR_MODE;
-		if (!current_is_in_group(oa->o_gid) &&
-		    !cfs_capable(CFS_CAP_FSETID))
+		if (!in_group_p(make_kgid(&init_user_ns, oa->o_gid)) &&
+		    !capable(CFS_CAP_FSETID))
 			attr->ia_mode &= ~S_ISGID;
 	}
 	if (valid & OBD_MD_FLUID) {
-		attr->ia_uid = oa->o_uid;
+		attr->ia_uid = make_kuid(&init_user_ns, oa->o_uid);
 		attr->ia_valid |= ATTR_UID;
 	}
 	if (valid & OBD_MD_FLGID) {
-		attr->ia_gid = oa->o_gid;
+		attr->ia_gid = make_kgid(&init_user_ns, oa->o_gid);
 		attr->ia_valid |= ATTR_GID;
 	}
 }

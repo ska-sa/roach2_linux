@@ -514,7 +514,7 @@ static int dib0700_rc_query_old_firmware(struct dvb_usb_device *d)
 
 	/* info("%d: %2X %2X %2X %2X",dvb_usb_dib0700_ir_proto,(int)key[3-2],(int)key[3-3],(int)key[3-1],(int)key[3]);  */
 
-	dib0700_rc_setup(d); /* reset ir sensor data to prevent false events */
+	dib0700_rc_setup(d, NULL); /* reset ir sensor data to prevent false events */
 
 	d->last_event = 0;
 	switch (d->props.rc.core.protocol) {
@@ -3589,6 +3589,8 @@ struct usb_device_id dib0700_usb_id_table[] = {
 	{ USB_DEVICE(USB_VID_DIBCOM,    USB_PID_DIBCOM_TFE7790P) },
 	{ USB_DEVICE(USB_VID_DIBCOM,    USB_PID_DIBCOM_TFE8096P) },
 /* 80 */{ USB_DEVICE(USB_VID_ELGATO,	USB_PID_ELGATO_EYETV_DTT_2) },
+	{ USB_DEVICE(USB_VID_PCTV,      USB_PID_PCTV_2002E) },
+	{ USB_DEVICE(USB_VID_PCTV,      USB_PID_PCTV_2002E_SE) },
 	{ 0 }		/* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, dib0700_usb_id_table);
@@ -3993,10 +3995,18 @@ struct dvb_usb_device_properties dib0700_devices[] = {
 			}
 		},
 
-		.num_device_descs = 1,
+		.num_device_descs = 3,
 		.devices = {
 			{   "Hauppauge Nova-TD Stick (52009)",
 				{ &dib0700_usb_id_table[35], NULL },
+				{ NULL },
+			},
+			{   "PCTV 2002e",
+				{ &dib0700_usb_id_table[81], NULL },
+				{ NULL },
+			},
+			{   "PCTV 2002e SE",
+				{ &dib0700_usb_id_table[82], NULL },
 				{ NULL },
 			},
 		},

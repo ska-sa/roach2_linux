@@ -33,7 +33,7 @@
 #include <linux/io.h>
 #include <linux/gpio.h>
 #include <linux/mm.h>
-
+#include <linux/of_address.h>
 
 #include <asm/uaccess.h>  
 
@@ -114,7 +114,7 @@ static int roach2_setup_gpios(struct fpga_device *fdev)
 
         np = of_find_compatible_node(NULL, NULL, "gpio-pins");
         if (!np) {
-                printk(KERN_ERR __FILE__ ": Unable to find pins");
+                printk(KERN_ERR __FILE__ ": Unable to find pins\n");
                 return -ENOENT;
         }
 
@@ -156,7 +156,7 @@ static int roach2_setup_gpios(struct fpga_device *fdev)
                         break;
                 }
                 if (i == SMAP_INITN_WAIT) {
-                        printk(KERN_INFO "SelectMap - Init_n pin has not been asserted");
+                        printk(KERN_INFO "SelectMap - Init_n pin has not been asserted\n");
                         return -EIO;
                 }
         }
@@ -176,7 +176,7 @@ static int roach_config_open(struct inode *inode, struct file *filp)
         mutex_lock(&roach2_mutex);
         rdev_config = container_of(inode->i_cdev, struct fpga_device, rdev[0]);
  
-        printk(KERN_NOTICE "roach open config called");
+        printk(KERN_NOTICE "roach open config called\n");
 
         status = mutex_lock_interruptible(&rdev_config->mutex);
         if(status)
@@ -184,7 +184,7 @@ static int roach_config_open(struct inode *inode, struct file *filp)
 
         /* WARNING */
         if (rdev_config->is_mem_open > 0) {
-                printk(KERN_WARNING "Another process busy accessing FPGA, proceed with caution reprogramming FPGA");
+                printk(KERN_WARNING "Another process busy accessing FPGA, proceed with caution reprogramming FPGA\n");
         }
 
         if (rdev_config->is_config_open) {
@@ -199,7 +199,7 @@ static int roach_config_open(struct inode *inode, struct file *filp)
         if (status)
                 goto error;
 
-        printk(KERN_NOTICE "rdev gpio preconfig done");
+        printk(KERN_NOTICE "rdev gpio preconfig done\n");
 
         rdev_config->gw_bytes = 0;
 
@@ -231,7 +231,7 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
 
         have_written = 0; /* the number of bytes which we were given which we have written */
         if (fdev->gw_bytes >= SMAP_IMAGE_SIZE) {
-                printk(KERN_WARNING "request for way too much data, gateware size %u", SMAP_IMAGE_SIZE);
+                printk(KERN_WARNING "request for way too much data, gateware size %u\n", SMAP_IMAGE_SIZE);
                 have_written = -EINVAL;
                 goto out_free_mutex;
         }
@@ -242,16 +242,16 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
 
                 retval = copy_from_user((uint32_t *)(fdev->tx_buf), (uint32_t *)(buf + have_written), will_write);
                 if (retval != 0){
-                        printk(KERN_WARNING "copy from user failed with code %d, at %u/%u in write, %u bytes programmed so far", retval, have_written, cnt, fdev->gw_bytes + have_written);
+                        printk(KERN_WARNING "copy from user failed with code %d, at %u/%u in write, %u bytes programmed so far\n", retval, have_written, cnt, fdev->gw_bytes + have_written);
                         goto out_free_mutex;
                 }
 
                 if ((fdev->gw_bytes + have_written + will_write) > SMAP_IMAGE_SIZE) {
                         if ((fdev->gw_bytes + have_written) < SMAP_IMAGE_SIZE) {
-                                printk(KERN_WARNING "truncating buffer to %u as total exceeds gatware size %u", will_write, SMAP_IMAGE_SIZE);
+                                printk(KERN_WARNING "truncating buffer to %u as total exceeds gatware size %u\n", will_write, SMAP_IMAGE_SIZE);
                                 will_write = SMAP_IMAGE_SIZE - (fdev->gw_bytes + have_written);
                         } else {
-                                printk(KERN_WARNING "writing too much data, want %u, gateware size %u", fdev->gw_bytes + have_written + will_write, SMAP_IMAGE_SIZE);
+                                printk(KERN_WARNING "writing too much data, want %u, gateware size %u\n", fdev->gw_bytes + have_written + will_write, SMAP_IMAGE_SIZE);
                                 will_write = 0;
                                 break; /* WARNING: end loop, but check if we need to do GPIO */
                         }
@@ -260,7 +260,7 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
                 src = fdev->tx_buf;
 
                 if(tmp == 1){
-                        printk(KERN_INFO "Programmed fpga device id = %08x", *(src+32));
+                        printk(KERN_INFO "Programmed fpga device id = %08x\n", *(src+32));
                         fpga_device_id = *(src + 32);
                         tmp++;
                 }
@@ -271,7 +271,7 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
                 }
 
                 if ((i * 4) < will_write) {
-                        printk(KERN_WARNING "request to write %u was not a multiple of 4, only writing %u", i * 4, will_write);
+                        printk(KERN_WARNING "request to write %u was not a multiple of 4, only writing %u\n", i * 4, will_write);
                         have_written += (i * 4);
                         break; /* WARNING: assumes that this only occurs for last few bytes of cnt */
                 }
@@ -288,17 +288,17 @@ ssize_t roach_config_write(struct file *filp, const char __user *buf, size_t cnt
                 for (i = 0; (i < SMAP_DONE_WAIT) && (gpio_get_value(fdev->done) == 0); i++);
 
                 if (i == SMAP_DONE_WAIT) {
-                        printk(KERN_ERR "error: SelectMAP programming failed, done stuck low");
+                        printk(KERN_ERR "error: SelectMAP programming failed, done stuck low\n");
                         have_written = -EIO;
                 } else {
-                        printk(KERN_INFO "ROACH2 Virtex-6 configuration completed successfully");
+                        printk(KERN_INFO "ROACH2 Virtex-6 configuration completed successfully\n");
                 }
 
                 goto out_free_mutex;
         }
         else{
                 if(fpga_device_id != V6_XQ6VSX475T_ID){
-                        printk(KERN_ERR "Attempted to program incorrect configuration onto Virtex6 FPGA");
+                        printk(KERN_ERR "Attempted to program incorrect configuration onto Virtex6 FPGA\n");
                         have_written = -EIO;
 
                 }
@@ -316,7 +316,7 @@ static int roach_config_release(struct inode *inode, struct file *filp)
         int status = 0;
         tmp = 1;
 
-        printk(KERN_NOTICE "roach release config called");
+        printk(KERN_NOTICE "roach release config called\n");
 
         mutex_lock(&rdev_config->mutex);
 
@@ -376,7 +376,7 @@ static ssize_t roach_mem_write(struct file *filp, const char __user *buf,
 
         /* WARNING */
         if (fdev->is_mem_open <= 0) {
-                printk(KERN_WARNING "Logic problem in accessing IO");
+                printk(KERN_WARNING "Logic problem in accessing IO\n");
         }
 
         have_written = 0; /* the number of bytes which we were given which we have written */
@@ -397,13 +397,13 @@ static ssize_t roach_mem_write(struct file *filp, const char __user *buf,
                 offset = *f_pos;
                 for (i = 0; i < word_count; i++) {
                         out_be32((uint32_t *)(fdev->fpga_virt + offset), *src);
-                        printk(KERN_INFO "request to write to pos=0x%p+offset=%u data_sample=0x%x", fdev->fpga_virt, offset, *src);
+                        printk(KERN_INFO "request to write to pos=0x%p+offset=%u data_sample=0x%x\n", fdev->fpga_virt, offset, *src);
                         offset += 4;
                         src++;
                 }
 
                 if ((i * 4) < will_write) {
-                        printk(KERN_WARNING "request to write %u was not a multiple of 4, only writing %u", will_write, i * 4);
+                        printk(KERN_WARNING "request to write %u was not a multiple of 4, only writing %u\n", will_write, i * 4);
                         have_written += (i * 4);
                         break; /* WARNING: assumes that this only occurs for last few bytes of cnt */
                 }
@@ -450,7 +450,7 @@ static ssize_t roach_mem_read(struct file *filp, char __user *buf,
 
                 for (i = 0; i < word_count; i++) {
                         *src = in_be32((uint32_t *)(fdev->fpga_virt + offset));
-                        printk(KERN_INFO "sample read from 0x%p+%u is 0x%x", fdev->fpga_virt, offset, *src);
+                        printk(KERN_INFO "sample read from 0x%p+%u is 0x%x\n", fdev->fpga_virt, offset, *src);
                         src++;
                         offset += 4;
                 }
@@ -505,13 +505,13 @@ static loff_t roach_mem_llseek(struct file *filp, loff_t offset, int origin)
 
 void roach_vma_open(struct vm_area_struct *vma)
 {
-        printk(KERN_NOTICE "roach VMA open, virt %lx, phys %lx",
+        printk(KERN_NOTICE "roach VMA open, virt %lx, phys %lx\n",
                         vma->vm_start, vma->vm_pgoff << PAGE_SHIFT);
 }
 
 void roach_vma_close(struct vm_area_struct *vma)
 {
-        printk(KERN_NOTICE "roach VMA close");
+        printk(KERN_NOTICE "roach VMA close\n");
 }
 
 static struct vm_operations_struct roach_remap_vm_ops = {
@@ -536,7 +536,7 @@ static int roach_mem_mmap(struct file *file, struct vm_area_struct *vma)
         vsize = vma->vm_end - vma->vm_start;
         offset = vma->vm_pgoff << PAGE_SHIFT;
 
-        printk(KERN_NOTICE "%s: vm_start %lx, vm_end %lx, vsize %lx, offset %lx",
+        printk(KERN_NOTICE "%s: vm_start %lx, vm_end %lx, vsize %lx, offset %lx\n",
                         __func__, vma->vm_start, vma->vm_end, (vma->vm_end - vma->vm_start), vma->vm_pgoff << PAGE_SHIFT);
 
         if (offset + vsize > ROACH_FPGA_LENGTH)
@@ -545,7 +545,7 @@ static int roach_mem_mmap(struct file *file, struct vm_area_struct *vma)
 
         pos = (unsigned long)(rdev_mem->fpga_virt) + offset;
 
-        printk(KERN_NOTICE "%s: pos to be converted : %lx", __func__, pos);
+        printk(KERN_NOTICE "%s: pos to be converted : %lx\n", __func__, pos);
 
 
         /* Avoid to swap out this VMA */
@@ -581,7 +581,7 @@ static int roach_mem_release(struct inode *inode, struct file *filp)
         struct fpga_device *rdev_mem = filp->private_data;
         int status = 0;
 
-        printk(KERN_NOTICE "roach release mem called");
+        printk(KERN_NOTICE "roach release mem called\n");
 
         mutex_lock(&rdev_mem->mutex);
 
@@ -842,7 +842,7 @@ static int r2fpga_of_probe(struct platform_device *op)
 
         if (family) {
                 if (!strcmp(family, "virtex5")) {
-                        printk(KERN_INFO "Virtex 5 family");
+                        printk(KERN_INFO "Virtex 5 family\n");
                 }
         }
         
@@ -915,25 +915,24 @@ static int __init r2fpga_drv_init(void)
         int retval = 0;
 
 
-        printk(KERN_INFO DRIVER_NAME ": ROACH2 FPGA Access driver");
+        printk(KERN_INFO DRIVER_NAME ": ROACH2 FPGA Access driver\n");
 
         if (roach_major) {
                 retval = register_chrdev_region(devt, 1, DRIVER_NAME);
-        }
-        else{
+        } else {
                 retval = alloc_chrdev_region(&devt, roach_minor, ROACH2_NR_DEVS , DRIVER_NAME);
                 roach_major = MAJOR(devt);
         }
 
         if (retval < 0) {
-                printk(KERN_WARNING "roach2: Unable to get major %d", roach_major);
+                printk(KERN_WARNING "roach2: Unable to get major %d\n", roach_major);
                 goto out;
         }
 
         if (roach_major == 0)
                 roach_major = retval;
 
-        printk(KERN_INFO "roach2:  major %d", roach_major);
+        printk(KERN_INFO "roach2:  major %d\n", roach_major);
 
         devt = MKDEV(roach_major, 0);
 

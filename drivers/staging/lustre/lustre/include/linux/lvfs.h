@@ -45,19 +45,19 @@
 #error Do not #include this file directly. #include <lvfs.h> instead
 #endif
 
-#include <linux/lustre_compat25.h>
-#include <linux/lustre_common.h>
-#include <linux/lvfs_linux.h>
+#include "lustre_compat25.h"
+#include "lustre_common.h"
+#include "lvfs_linux.h"
 
 #define LLOG_LVFS
 
 /* simple.c */
 
 struct lvfs_ucred {
-	__u32		   luc_uid;
-	__u32		   luc_gid;
-	__u32		   luc_fsuid;
-	__u32		   luc_fsgid;
+	kuid_t		luc_uid;
+	kgid_t		luc_gid;
+	kuid_t		luc_fsuid;
+	kgid_t		luc_fsgid;
 	kernel_cap_t	luc_cap;
 	__u32		   luc_umask;
 	struct group_info      *luc_ginfo;

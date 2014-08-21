@@ -17,6 +17,16 @@ config OF_IOMMU
        def_bool y
        depends on OF
 
+config FSL_PAMU
+	bool "Freescale IOMMU support"
+	depends on PPC_E500MC
+	select IOMMU_API
+	select GENERIC_ALLOCATOR
+	help
+	  Freescale PAMU support. PAMU is the IOMMU present on Freescale QorIQ platforms.
+	  PAMU can authorize memory access, remap the memory address, and remap I/O
+	  transaction types.
+
 # MSM IOMMU support
 config MSM_IOMMU
 	bool "MSM IOMMU Support"
@@ -42,7 +52,7 @@ config AMD_IOMMU
 	select PCI_PRI
 	select PCI_PASID
 	select IOMMU_API
-	depends on X86_64 && PCI && ACPI && X86_IO_APIC
+	depends on X86_64 && PCI && ACPI
 	---help---
 	  With this option you can enable support for AMD IOMMU hardware in
 	  your system. An IOMMU is a hardware component which provides
@@ -168,13 +178,13 @@ config TEGRA_IOMMU_SMMU
 
 config EXYNOS_IOMMU
 	bool "Exynos IOMMU Support"
-	depends on ARCH_EXYNOS && EXYNOS_DEV_SYSMMU
+	depends on ARCH_EXYNOS
 	select IOMMU_API
 	help
-	  Support for the IOMMU(System MMU) of Samsung Exynos application
-	  processor family. This enables H/W multimedia accellerators to see
-	  non-linear physical memory chunks as a linear memory in their
-	  address spaces
+	  Support for the IOMMU (System MMU) of Samsung Exynos application
+	  processor family. This enables H/W multimedia accelerators to see
+	  non-linear physical memory chunks as linear memory in their
+	  address space.
 
 	  If unsure, say N here.
 
@@ -183,9 +193,9 @@ config EXYNOS_IOMMU_DEBUG
 	depends on EXYNOS_IOMMU
 	help
 	  Select this to see the detailed log message that shows what
-	  happens in the IOMMU driver
+	  happens in the IOMMU driver.
 
-	  Say N unless you need kernel log message for IOMMU debugging
+	  Say N unless you need kernel log message for IOMMU debugging.
 
 config SHMOBILE_IPMMU
 	bool
@@ -196,7 +206,8 @@ config SHMOBILE_IPMMU_TLB
 config SHMOBILE_IOMMU
 	bool "IOMMU for Renesas IPMMU/IPMMUI"
 	default n
-	depends on (ARM && ARCH_SHMOBILE)
+	depends on ARM
+	depends on ARCH_SHMOBILE || COMPILE_TEST
 	select IOMMU_API
 	select ARM_DMA_USE_IOMMU
 	select SHMOBILE_IPMMU
@@ -261,6 +272,18 @@ config SHMOBILE_IOMMU_L1SIZE
 	default 256 if SHMOBILE_IOMMU_ADDRSIZE_64MB
 	default 128 if SHMOBILE_IOMMU_ADDRSIZE_32MB
 
+config IPMMU_VMSA
+	bool "Renesas VMSA-compatible IPMMU"
+	depends on ARM_LPAE
+	depends on ARCH_SHMOBILE || COMPILE_TEST
+	select IOMMU_API
+	select ARM_DMA_USE_IOMMU
+	help
+	  Support for the Renesas VMSA-compatible IPMMU Renesas found in the
+	  R-Mobile APE6 and R-Car H2/M2 SoCs.
+
+	  If unsure, say N.
+
 config SPAPR_TCE_IOMMU
 	bool "sPAPR TCE IOMMU Support"
 	depends on PPC_POWERNV || PPC_PSERIES
@@ -268,5 +291,18 @@ config SPAPR_TCE_IOMMU
 	help
 	  Enables bits of IOMMU API required by VFIO. The iommu_ops
 	  is not implemented as it is not necessary for VFIO.
+
+config ARM_SMMU
+	bool "ARM Ltd. System MMU (SMMU) Support"
+	depends on ARM64 || (ARM_LPAE && OF)
+	select IOMMU_API
+	select ARM_DMA_USE_IOMMU if ARM
+	help
+	  Support for implementations of the ARM System MMU architecture
+	  versions 1 and 2. The driver supports both v7l and v8l table
+	  formats with 4k and 64k page sizes.
+
+	  Say Y here if your SoC includes an IOMMU device implementing
+	  the ARM SMMU architecture.
 
 endif # IOMMU_SUPPORT

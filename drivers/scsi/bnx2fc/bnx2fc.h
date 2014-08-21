@@ -64,7 +64,7 @@
 #include "bnx2fc_constants.h"
 
 #define BNX2FC_NAME		"bnx2fc"
-#define BNX2FC_VERSION		"1.0.14"
+#define BNX2FC_VERSION		"2.4.2"
 
 #define PFX			"bnx2fc: "
 
@@ -105,7 +105,7 @@
 #define BNX2FC_RQ_WQE_SIZE		(BNX2FC_RQ_BUF_SZ)
 #define BNX2FC_XFERQ_WQE_SIZE		(sizeof(struct fcoe_xfrqe))
 #define BNX2FC_CONFQ_WQE_SIZE		(sizeof(struct fcoe_confqe))
-#define BNX2FC_5771X_DB_PAGE_SIZE	128
+#define BNX2X_DB_SHIFT			3
 
 #define BNX2FC_TASK_SIZE		128
 #define	BNX2FC_TASKS_PER_PAGE		(PAGE_SIZE/BNX2FC_TASK_SIZE)
@@ -367,6 +367,7 @@ struct bnx2fc_rport {
 	atomic_t num_active_ios;
 	u32 flush_in_prog;
 	unsigned long timestamp;
+	unsigned long retry_delay_timestamp;
 	struct list_head free_task_list;
 	struct bnx2fc_cmd *pending_queue[BNX2FC_SQ_WQES_MAX+1];
 	struct list_head active_cmd_queue;

@@ -89,6 +89,8 @@ typedef struct xfs_agf {
 	/* structure must be padded to 64 bit alignment */
 } xfs_agf_t;
 
+#define XFS_AGF_CRC_OFF		offsetof(struct xfs_agf, agf_crc)
+
 #define	XFS_AGF_MAGICNUM	0x00000001
 #define	XFS_AGF_VERSIONNUM	0x00000002
 #define	XFS_AGF_SEQNO		0x00000004
@@ -128,8 +130,6 @@ typedef struct xfs_agf {
 extern int xfs_read_agf(struct xfs_mount *mp, struct xfs_trans *tp,
 			xfs_agnumber_t agno, int flags, struct xfs_buf **bpp);
 
-extern const struct xfs_buf_ops xfs_agf_buf_ops;
-
 /*
  * Size of the unlinked inode hash table in the agi.
  */
@@ -160,28 +160,38 @@ typedef struct xfs_agi {
 	 * still being referenced.
 	 */
 	__be32		agi_unlinked[XFS_AGI_UNLINKED_BUCKETS];
-
+	/*
+	 * This marks the end of logging region 1 and start of logging region 2.
+	 */
 	uuid_t		agi_uuid;	/* uuid of filesystem */
 	__be32		agi_crc;	/* crc of agi sector */
 	__be32		agi_pad32;
 	__be64		agi_lsn;	/* last write sequence */
 
+	__be32		agi_free_root; /* root of the free inode btree */
+	__be32		agi_free_level;/* levels in free inode btree */
+
 	/* structure must be padded to 64 bit alignment */
 } xfs_agi_t;
 
-#define	XFS_AGI_MAGICNUM	0x00000001
-#define	XFS_AGI_VERSIONNUM	0x00000002
-#define	XFS_AGI_SEQNO		0x00000004
-#define	XFS_AGI_LENGTH		0x00000008
-#define	XFS_AGI_COUNT		0x00000010
-#define	XFS_AGI_ROOT		0x00000020
-#define	XFS_AGI_LEVEL		0x00000040
-#define	XFS_AGI_FREECOUNT	0x00000080
-#define	XFS_AGI_NEWINO		0x00000100
-#define	XFS_AGI_DIRINO		0x00000200
-#define	XFS_AGI_UNLINKED	0x00000400
-#define	XFS_AGI_NUM_BITS	11
-#define	XFS_AGI_ALL_BITS	((1 << XFS_AGI_NUM_BITS) - 1)
+#define XFS_AGI_CRC_OFF		offsetof(struct xfs_agi, agi_crc)
+
+#define	XFS_AGI_MAGICNUM	(1 << 0)
+#define	XFS_AGI_VERSIONNUM	(1 << 1)
+#define	XFS_AGI_SEQNO		(1 << 2)
+#define	XFS_AGI_LENGTH		(1 << 3)
+#define	XFS_AGI_COUNT		(1 << 4)
+#define	XFS_AGI_ROOT		(1 << 5)
+#define	XFS_AGI_LEVEL		(1 << 6)
+#define	XFS_AGI_FREECOUNT	(1 << 7)
+#define	XFS_AGI_NEWINO		(1 << 8)
+#define	XFS_AGI_DIRINO		(1 << 9)
+#define	XFS_AGI_UNLINKED	(1 << 10)
+#define	XFS_AGI_NUM_BITS_R1	11	/* end of the 1st agi logging region */
+#define	XFS_AGI_ALL_BITS_R1	((1 << XFS_AGI_NUM_BITS_R1) - 1)
+#define	XFS_AGI_FREE_ROOT	(1 << 11)
+#define	XFS_AGI_FREE_LEVEL	(1 << 12)
+#define	XFS_AGI_NUM_BITS_R2	13
 
 /* disk block (xfs_daddr_t) in the AG */
 #define XFS_AGI_DADDR(mp)	((xfs_daddr_t)(2 << (mp)->m_sectbb_log))
@@ -190,8 +200,6 @@ typedef struct xfs_agi {
 
 extern int xfs_read_agi(struct xfs_mount *mp, struct xfs_trans *tp,
 				xfs_agnumber_t agno, struct xfs_buf **bpp);
-
-extern const struct xfs_buf_ops xfs_agi_buf_ops;
 
 /*
  * The third a.g. block contains the a.g. freelist, an array
@@ -226,58 +234,7 @@ typedef struct xfs_agfl {
 	__be32		agfl_bno[];	/* actually XFS_AGFL_SIZE(mp) */
 } xfs_agfl_t;
 
-/*
- * Per-ag incore structure, copies of information in agf and agi,
- * to improve the performance of allocation group selection.
- */
-#define XFS_PAGB_NUM_SLOTS	128
-
-typedef struct xfs_perag {
-	struct xfs_mount *pag_mount;	/* owner filesystem */
-	xfs_agnumber_t	pag_agno;	/* AG this structure belongs to */
-	atomic_t	pag_ref;	/* perag reference count */
-	char		pagf_init;	/* this agf's entry is initialized */
-	char		pagi_init;	/* this agi's entry is initialized */
-	char		pagf_metadata;	/* the agf is preferred to be metadata */
-	char		pagi_inodeok;	/* The agi is ok for inodes */
-	__uint8_t	pagf_levels[XFS_BTNUM_AGF];
-					/* # of levels in bno & cnt btree */
-	__uint32_t	pagf_flcount;	/* count of blocks in freelist */
-	xfs_extlen_t	pagf_freeblks;	/* total free blocks */
-	xfs_extlen_t	pagf_longest;	/* longest free space */
-	__uint32_t	pagf_btreeblks;	/* # of blocks held in AGF btrees */
-	xfs_agino_t	pagi_freecount;	/* number of free inodes */
-	xfs_agino_t	pagi_count;	/* number of allocated inodes */
-
-	/*
-	 * Inode allocation search lookup optimisation.
-	 * If the pagino matches, the search for new inodes
-	 * doesn't need to search the near ones again straight away
-	 */
-	xfs_agino_t	pagl_pagino;
-	xfs_agino_t	pagl_leftrec;
-	xfs_agino_t	pagl_rightrec;
-#ifdef __KERNEL__
-	spinlock_t	pagb_lock;	/* lock for pagb_tree */
-	struct rb_root	pagb_tree;	/* ordered tree of busy extents */
-
-	atomic_t        pagf_fstrms;    /* # of filestreams active in this AG */
-
-	spinlock_t	pag_ici_lock;	/* incore inode cache lock */
-	struct radix_tree_root pag_ici_root;	/* incore inode cache root */
-	int		pag_ici_reclaimable;	/* reclaimable inodes */
-	struct mutex	pag_ici_reclaim_lock;	/* serialisation point */
-	unsigned long	pag_ici_reclaim_cursor;	/* reclaim restart point */
-
-	/* buffer cache index */
-	spinlock_t	pag_buf_lock;	/* lock for pag_buf_tree */
-	struct rb_root	pag_buf_tree;	/* ordered tree of active buffers */
-
-	/* for rcu-safe freeing */
-	struct rcu_head	rcu_head;
-#endif
-	int		pagb_count;	/* pagb slots in use */
-} xfs_perag_t;
+#define XFS_AGFL_CRC_OFF	offsetof(struct xfs_agfl, agfl_crc)
 
 /*
  * tags for inode radix tree

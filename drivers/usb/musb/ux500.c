@@ -21,7 +21,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/io.h>
@@ -227,7 +226,7 @@ ux500_of_probe(struct platform_device *pdev, struct device_node *np)
 static int ux500_probe(struct platform_device *pdev)
 {
 	struct resource musb_resources[2];
-	struct musb_hdrc_platform_data	*pdata = pdev->dev.platform_data;
+	struct musb_hdrc_platform_data	*pdata = dev_get_platdata(&pdev->dev);
 	struct device_node		*np = pdev->dev.of_node;
 	struct platform_device		*musb;
 	struct ux500_glue		*glue;
@@ -247,7 +246,7 @@ static int ux500_probe(struct platform_device *pdev)
 		}
 	}
 
-	glue = kzalloc(sizeof(*glue), GFP_KERNEL);
+	glue = devm_kzalloc(&pdev->dev, sizeof(*glue), GFP_KERNEL);
 	if (!glue) {
 		dev_err(&pdev->dev, "failed to allocate glue context\n");
 		goto err0;
@@ -256,26 +255,25 @@ static int ux500_probe(struct platform_device *pdev)
 	musb = platform_device_alloc("musb-hdrc", PLATFORM_DEVID_AUTO);
 	if (!musb) {
 		dev_err(&pdev->dev, "failed to allocate musb device\n");
-		goto err1;
+		goto err0;
 	}
 
-	clk = clk_get(&pdev->dev, "usb");
+	clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(clk)) {
 		dev_err(&pdev->dev, "failed to get clock\n");
 		ret = PTR_ERR(clk);
-		goto err3;
+		goto err1;
 	}
 
 	ret = clk_prepare_enable(clk);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable clock\n");
-		goto err4;
+		goto err1;
 	}
 
 	musb->dev.parent		= &pdev->dev;
 	musb->dev.dma_mask		= &pdev->dev.coherent_dma_mask;
 	musb->dev.coherent_dma_mask	= pdev->dev.coherent_dma_mask;
-	musb->dev.of_node		= pdev->dev.of_node;
 
 	glue->dev			= &pdev->dev;
 	glue->musb			= musb;
@@ -303,34 +301,28 @@ static int ux500_probe(struct platform_device *pdev)
 			ARRAY_SIZE(musb_resources));
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add resources\n");
-		goto err5;
+		goto err2;
 	}
 
 	ret = platform_device_add_data(musb, pdata, sizeof(*pdata));
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add platform_data\n");
-		goto err5;
+		goto err2;
 	}
 
 	ret = platform_device_add(musb);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register musb device\n");
-		goto err5;
+		goto err2;
 	}
 
 	return 0;
 
-err5:
+err2:
 	clk_disable_unprepare(clk);
 
-err4:
-	clk_put(clk);
-
-err3:
-	platform_device_put(musb);
-
 err1:
-	kfree(glue);
+	platform_device_put(musb);
 
 err0:
 	return ret;
@@ -342,8 +334,6 @@ static int ux500_remove(struct platform_device *pdev)
 
 	platform_device_unregister(glue->musb);
 	clk_disable_unprepare(glue->clk);
-	clk_put(glue->clk);
-	kfree(glue);
 
 	return 0;
 }
@@ -376,16 +366,9 @@ static int ux500_resume(struct device *dev)
 
 	return 0;
 }
-
-static const struct dev_pm_ops ux500_pm_ops = {
-	.suspend	= ux500_suspend,
-	.resume		= ux500_resume,
-};
-
-#define DEV_PM_OPS	(&ux500_pm_ops)
-#else
-#define DEV_PM_OPS	NULL
 #endif
+
+static SIMPLE_DEV_PM_OPS(ux500_pm_ops, ux500_suspend, ux500_resume);
 
 static const struct of_device_id ux500_match[] = {
         { .compatible = "stericsson,db8500-musb", },
@@ -397,7 +380,7 @@ static struct platform_driver ux500_driver = {
 	.remove		= ux500_remove,
 	.driver		= {
 		.name	= "musb-ux500",
-		.pm	= DEV_PM_OPS,
+		.pm	= &ux500_pm_ops,
 		.of_match_table = ux500_match,
 	},
 };

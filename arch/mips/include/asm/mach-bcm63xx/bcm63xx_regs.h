@@ -15,6 +15,39 @@
 /* Clock Control register */
 #define PERF_CKCTL_REG			0x4
 
+#define CKCTL_3368_MAC_EN		(1 << 3)
+#define CKCTL_3368_TC_EN		(1 << 5)
+#define CKCTL_3368_US_TOP_EN		(1 << 6)
+#define CKCTL_3368_DS_TOP_EN		(1 << 7)
+#define CKCTL_3368_APM_EN		(1 << 8)
+#define CKCTL_3368_SPI_EN		(1 << 9)
+#define CKCTL_3368_USBS_EN		(1 << 10)
+#define CKCTL_3368_BMU_EN		(1 << 11)
+#define CKCTL_3368_PCM_EN		(1 << 12)
+#define CKCTL_3368_NTP_EN		(1 << 13)
+#define CKCTL_3368_ACP_B_EN		(1 << 14)
+#define CKCTL_3368_ACP_A_EN		(1 << 15)
+#define CKCTL_3368_EMUSB_EN		(1 << 17)
+#define CKCTL_3368_ENET0_EN		(1 << 18)
+#define CKCTL_3368_ENET1_EN		(1 << 19)
+#define CKCTL_3368_USBU_EN		(1 << 20)
+#define CKCTL_3368_EPHY_EN		(1 << 21)
+
+#define CKCTL_3368_ALL_SAFE_EN		(CKCTL_3368_MAC_EN | \
+					 CKCTL_3368_TC_EN | \
+					 CKCTL_3368_US_TOP_EN | \
+					 CKCTL_3368_DS_TOP_EN | \
+					 CKCTL_3368_APM_EN | \
+					 CKCTL_3368_SPI_EN | \
+					 CKCTL_3368_USBS_EN | \
+					 CKCTL_3368_BMU_EN | \
+					 CKCTL_3368_PCM_EN | \
+					 CKCTL_3368_NTP_EN | \
+					 CKCTL_3368_ACP_B_EN | \
+					 CKCTL_3368_ACP_A_EN | \
+					 CKCTL_3368_EMUSB_EN | \
+					 CKCTL_3368_USBU_EN)
+
 #define CKCTL_6328_PHYMIPS_EN		(1 << 0)
 #define CKCTL_6328_ADSL_QPROC_EN	(1 << 1)
 #define CKCTL_6328_ADSL_AFE_EN		(1 << 2)
@@ -181,6 +214,7 @@
 #define SYS_PLL_SOFT_RESET		0x1
 
 /* Interrupt Mask register */
+#define PERF_IRQMASK_3368_REG		0xc
 #define PERF_IRQMASK_6328_REG		0x20
 #define PERF_IRQMASK_6338_REG		0xc
 #define PERF_IRQMASK_6345_REG		0xc
@@ -190,6 +224,7 @@
 #define PERF_IRQMASK_6368_REG		0x20
 
 /* Interrupt Status register */
+#define PERF_IRQSTAT_3368_REG		0x10
 #define PERF_IRQSTAT_6328_REG		0x28
 #define PERF_IRQSTAT_6338_REG		0x10
 #define PERF_IRQSTAT_6345_REG		0x10
@@ -199,6 +234,7 @@
 #define PERF_IRQSTAT_6368_REG		0x28
 
 /* External Interrupt Configuration register */
+#define PERF_EXTIRQ_CFG_REG_3368	0x14
 #define PERF_EXTIRQ_CFG_REG_6328	0x18
 #define PERF_EXTIRQ_CFG_REG_6338	0x14
 #define PERF_EXTIRQ_CFG_REG_6345	0x14
@@ -235,6 +271,13 @@
 #define PERF_SOFTRESET_6358_REG		0x34
 #define PERF_SOFTRESET_6362_REG		0x10
 #define PERF_SOFTRESET_6368_REG		0x10
+
+#define SOFTRESET_3368_SPI_MASK		(1 << 0)
+#define SOFTRESET_3368_ENET_MASK	(1 << 2)
+#define SOFTRESET_3368_MPI_MASK		(1 << 3)
+#define SOFTRESET_3368_EPHY_MASK	(1 << 6)
+#define SOFTRESET_3368_USBS_MASK	(1 << 11)
+#define SOFTRESET_3368_PCM_MASK		(1 << 13)
 
 #define SOFTRESET_6328_SPI_MASK		(1 << 0)
 #define SOFTRESET_6328_EPHY_MASK	(1 << 1)
@@ -418,126 +461,6 @@
 
 /* Watchdog soft reset register (BCM6328 only) */
 #define WDT_SOFTRESET_REG		0xc
-
-/*************************************************************************
- * _REG relative to RSET_UARTx
- *************************************************************************/
-
-/* UART Control Register */
-#define UART_CTL_REG			0x0
-#define UART_CTL_RXTMOUTCNT_SHIFT	0
-#define UART_CTL_RXTMOUTCNT_MASK	(0x1f << UART_CTL_RXTMOUTCNT_SHIFT)
-#define UART_CTL_RSTTXDN_SHIFT		5
-#define UART_CTL_RSTTXDN_MASK		(1 << UART_CTL_RSTTXDN_SHIFT)
-#define UART_CTL_RSTRXFIFO_SHIFT		6
-#define UART_CTL_RSTRXFIFO_MASK		(1 << UART_CTL_RSTRXFIFO_SHIFT)
-#define UART_CTL_RSTTXFIFO_SHIFT		7
-#define UART_CTL_RSTTXFIFO_MASK		(1 << UART_CTL_RSTTXFIFO_SHIFT)
-#define UART_CTL_STOPBITS_SHIFT		8
-#define UART_CTL_STOPBITS_MASK		(0xf << UART_CTL_STOPBITS_SHIFT)
-#define UART_CTL_STOPBITS_1		(0x7 << UART_CTL_STOPBITS_SHIFT)
-#define UART_CTL_STOPBITS_2		(0xf << UART_CTL_STOPBITS_SHIFT)
-#define UART_CTL_BITSPERSYM_SHIFT	12
-#define UART_CTL_BITSPERSYM_MASK	(0x3 << UART_CTL_BITSPERSYM_SHIFT)
-#define UART_CTL_XMITBRK_SHIFT		14
-#define UART_CTL_XMITBRK_MASK		(1 << UART_CTL_XMITBRK_SHIFT)
-#define UART_CTL_RSVD_SHIFT		15
-#define UART_CTL_RSVD_MASK		(1 << UART_CTL_RSVD_SHIFT)
-#define UART_CTL_RXPAREVEN_SHIFT		16
-#define UART_CTL_RXPAREVEN_MASK		(1 << UART_CTL_RXPAREVEN_SHIFT)
-#define UART_CTL_RXPAREN_SHIFT		17
-#define UART_CTL_RXPAREN_MASK		(1 << UART_CTL_RXPAREN_SHIFT)
-#define UART_CTL_TXPAREVEN_SHIFT		18
-#define UART_CTL_TXPAREVEN_MASK		(1 << UART_CTL_TXPAREVEN_SHIFT)
-#define UART_CTL_TXPAREN_SHIFT		18
-#define UART_CTL_TXPAREN_MASK		(1 << UART_CTL_TXPAREN_SHIFT)
-#define UART_CTL_LOOPBACK_SHIFT		20
-#define UART_CTL_LOOPBACK_MASK		(1 << UART_CTL_LOOPBACK_SHIFT)
-#define UART_CTL_RXEN_SHIFT		21
-#define UART_CTL_RXEN_MASK		(1 << UART_CTL_RXEN_SHIFT)
-#define UART_CTL_TXEN_SHIFT		22
-#define UART_CTL_TXEN_MASK		(1 << UART_CTL_TXEN_SHIFT)
-#define UART_CTL_BRGEN_SHIFT		23
-#define UART_CTL_BRGEN_MASK		(1 << UART_CTL_BRGEN_SHIFT)
-
-/* UART Baudword register */
-#define UART_BAUD_REG			0x4
-
-/* UART Misc Control register */
-#define UART_MCTL_REG			0x8
-#define UART_MCTL_DTR_SHIFT		0
-#define UART_MCTL_DTR_MASK		(1 << UART_MCTL_DTR_SHIFT)
-#define UART_MCTL_RTS_SHIFT		1
-#define UART_MCTL_RTS_MASK		(1 << UART_MCTL_RTS_SHIFT)
-#define UART_MCTL_RXFIFOTHRESH_SHIFT	8
-#define UART_MCTL_RXFIFOTHRESH_MASK	(0xf << UART_MCTL_RXFIFOTHRESH_SHIFT)
-#define UART_MCTL_TXFIFOTHRESH_SHIFT	12
-#define UART_MCTL_TXFIFOTHRESH_MASK	(0xf << UART_MCTL_TXFIFOTHRESH_SHIFT)
-#define UART_MCTL_RXFIFOFILL_SHIFT	16
-#define UART_MCTL_RXFIFOFILL_MASK	(0x1f << UART_MCTL_RXFIFOFILL_SHIFT)
-#define UART_MCTL_TXFIFOFILL_SHIFT	24
-#define UART_MCTL_TXFIFOFILL_MASK	(0x1f << UART_MCTL_TXFIFOFILL_SHIFT)
-
-/* UART External Input Configuration register */
-#define UART_EXTINP_REG			0xc
-#define UART_EXTINP_RI_SHIFT		0
-#define UART_EXTINP_RI_MASK		(1 << UART_EXTINP_RI_SHIFT)
-#define UART_EXTINP_CTS_SHIFT		1
-#define UART_EXTINP_CTS_MASK		(1 << UART_EXTINP_CTS_SHIFT)
-#define UART_EXTINP_DCD_SHIFT		2
-#define UART_EXTINP_DCD_MASK		(1 << UART_EXTINP_DCD_SHIFT)
-#define UART_EXTINP_DSR_SHIFT		3
-#define UART_EXTINP_DSR_MASK		(1 << UART_EXTINP_DSR_SHIFT)
-#define UART_EXTINP_IRSTAT(x)		(1 << (x + 4))
-#define UART_EXTINP_IRMASK(x)		(1 << (x + 8))
-#define UART_EXTINP_IR_RI		0
-#define UART_EXTINP_IR_CTS		1
-#define UART_EXTINP_IR_DCD		2
-#define UART_EXTINP_IR_DSR		3
-#define UART_EXTINP_RI_NOSENSE_SHIFT	16
-#define UART_EXTINP_RI_NOSENSE_MASK	(1 << UART_EXTINP_RI_NOSENSE_SHIFT)
-#define UART_EXTINP_CTS_NOSENSE_SHIFT	17
-#define UART_EXTINP_CTS_NOSENSE_MASK	(1 << UART_EXTINP_CTS_NOSENSE_SHIFT)
-#define UART_EXTINP_DCD_NOSENSE_SHIFT	18
-#define UART_EXTINP_DCD_NOSENSE_MASK	(1 << UART_EXTINP_DCD_NOSENSE_SHIFT)
-#define UART_EXTINP_DSR_NOSENSE_SHIFT	19
-#define UART_EXTINP_DSR_NOSENSE_MASK	(1 << UART_EXTINP_DSR_NOSENSE_SHIFT)
-
-/* UART Interrupt register */
-#define UART_IR_REG			0x10
-#define UART_IR_MASK(x)			(1 << (x + 16))
-#define UART_IR_STAT(x)			(1 << (x))
-#define UART_IR_EXTIP			0
-#define UART_IR_TXUNDER			1
-#define UART_IR_TXOVER			2
-#define UART_IR_TXTRESH			3
-#define UART_IR_TXRDLATCH		4
-#define UART_IR_TXEMPTY			5
-#define UART_IR_RXUNDER			6
-#define UART_IR_RXOVER			7
-#define UART_IR_RXTIMEOUT		8
-#define UART_IR_RXFULL			9
-#define UART_IR_RXTHRESH		10
-#define UART_IR_RXNOTEMPTY		11
-#define UART_IR_RXFRAMEERR		12
-#define UART_IR_RXPARERR		13
-#define UART_IR_RXBRK			14
-#define UART_IR_TXDONE			15
-
-/* UART Fifo register */
-#define UART_FIFO_REG			0x14
-#define UART_FIFO_VALID_SHIFT		0
-#define UART_FIFO_VALID_MASK		0xff
-#define UART_FIFO_FRAMEERR_SHIFT	8
-#define UART_FIFO_FRAMEERR_MASK		(1 << UART_FIFO_FRAMEERR_SHIFT)
-#define UART_FIFO_PARERR_SHIFT		9
-#define UART_FIFO_PARERR_MASK		(1 << UART_FIFO_PARERR_SHIFT)
-#define UART_FIFO_BRKDET_SHIFT		10
-#define UART_FIFO_BRKDET_MASK		(1 << UART_FIFO_BRKDET_SHIFT)
-#define UART_FIFO_ANYERR_MASK		(UART_FIFO_FRAMEERR_MASK |	\
-					UART_FIFO_PARERR_MASK |		\
-					UART_FIFO_BRKDET_MASK)
-
 
 /*************************************************************************
  * _REG relative to RSET_GPIO
@@ -1370,7 +1293,7 @@
 #define SPI_6348_RX_DATA		0x80
 #define SPI_6348_RX_DATA_SIZE		0x3f
 
-/* BCM 6358/6262/6368 SPI core */
+/* BCM 3368/6358/6262/6368 SPI core */
 #define SPI_6358_MSG_CTL		0x00	/* 16-bits register */
 #define SPI_6358_MSG_CTL_WIDTH		16
 #define SPI_6358_MSG_DATA		0x02
@@ -1510,5 +1433,12 @@
 #define PCIE_RC_INT_D			(1 << 3)
 
 #define PCIE_DEVICE_OFFSET		0x8000
+
+/*************************************************************************
+ * _REG relative to RSET_OTP
+ *************************************************************************/
+
+#define OTP_USER_BITS_6328_REG(i)	(0x20 + (i) * 4)
+#define   OTP_6328_REG3_TP1_DISABLED	BIT(9)
 
 #endif /* BCM63XX_REGS_H_ */

@@ -67,6 +67,7 @@ Configuration Options:
  * options that are used with comedi_config.
  */
 
+#include <linux/module.h>
 #include <linux/pci.h>
 
 #include "../comedidev.h"
@@ -74,9 +75,6 @@ Configuration Options:
 #include "comedi_fc.h"
 
 /* Imaginary registers for the imaginary board */
-
-#define SKEL_SIZE 0
-
 #define SKEL_START_AI_CONV	0
 #define SKEL_AI_READ		0
 
@@ -128,7 +126,7 @@ struct skel_private {
  * convert ns nanoseconds to a counter value suitable for programming
  * the device.  Also, it should adjust ns so that it cooresponds to
  * the actual time that the device will use. */
-static int skel_ns_to_timer(unsigned int *ns, int round)
+static int skel_ns_to_timer(unsigned int *ns, unsigned int flags)
 {
 	/* trivial timer */
 	/* if your timing is done through two cascaded timers, the
@@ -141,6 +139,29 @@ static int skel_ns_to_timer(unsigned int *ns, int round)
 }
 
 /*
+ * This function doesn't require a particular form, this is just
+ * what happens to be used in some of the drivers. The comedi_timeout()
+ * helper uses this callback to check for the end-of-conversion while
+ * waiting for up to 1 second. This function should return 0 when the
+ * conversion is finished and -EBUSY to keep waiting. Any other errno
+ * will terminate comedi_timeout() and return that errno to the caller.
+ * If the timeout occurs, comedi_timeout() will return -ETIMEDOUT.
+ */
+static int skel_ai_eoc(struct comedi_device *dev,
+		       struct comedi_subdevice *s,
+		       struct comedi_insn *insn,
+		       unsigned long context)
+{
+	unsigned int status;
+
+	/* status = inb(dev->iobase + SKEL_STATUS); */
+	status = 1;
+	if (status)
+		return 0;
+	return -EBUSY;
+}
+
+/*
  * "instructions" read/write data in "one-shot" or "software-triggered"
  * mode.
  */
@@ -148,9 +169,9 @@ static int skel_ai_rinsn(struct comedi_device *dev, struct comedi_subdevice *s,
 			 struct comedi_insn *insn, unsigned int *data)
 {
 	const struct skel_board *thisboard = comedi_board(dev);
-	int n, i;
+	int n;
 	unsigned int d;
-	unsigned int status;
+	int ret;
 
 	/* a typical programming sequence */
 
@@ -164,18 +185,10 @@ static int skel_ai_rinsn(struct comedi_device *dev, struct comedi_subdevice *s,
 		/* trigger conversion */
 		/* outw(0,dev->iobase + SKEL_CONVERT); */
 
-#define TIMEOUT 100
 		/* wait for conversion to end */
-		for (i = 0; i < TIMEOUT; i++) {
-			status = 1;
-			/* status = inb(dev->iobase + SKEL_STATUS); */
-			if (status)
-				break;
-		}
-		if (i == TIMEOUT) {
-			dev_warn(dev->class_dev, "ai timeout\n");
-			return -ETIMEDOUT;
-		}
+		ret = comedi_timeout(dev, s, insn, skel_ai_eoc, 0);
+		if (ret)
+			return ret;
 
 		/* read data */
 		/* d = inw(dev->iobase + SKEL_AI_DATA); */
@@ -204,7 +217,7 @@ static int skel_ai_cmdtest(struct comedi_device *dev,
 			   struct comedi_cmd *cmd)
 {
 	int err = 0;
-	int tmp;
+	unsigned int arg;
 
 	/* Step 1 : check if triggers are trivially valid */
 
@@ -270,24 +283,19 @@ static int skel_ai_cmdtest(struct comedi_device *dev,
 	/* step 4: fix up any arguments */
 
 	if (cmd->scan_begin_src == TRIG_TIMER) {
-		tmp = cmd->scan_begin_arg;
-		skel_ns_to_timer(&cmd->scan_begin_arg,
-				 cmd->flags & TRIG_ROUND_MASK);
-		if (tmp != cmd->scan_begin_arg)
-			err++;
+		arg = cmd->scan_begin_arg;
+		skel_ns_to_timer(&arg, cmd->flags);
+		err |= cfc_check_trigger_arg_is(&cmd->scan_begin_arg, arg);
 	}
 	if (cmd->convert_src == TRIG_TIMER) {
-		tmp = cmd->convert_arg;
-		skel_ns_to_timer(&cmd->convert_arg,
-				 cmd->flags & TRIG_ROUND_MASK);
-		if (tmp != cmd->convert_arg)
-			err++;
-		if (cmd->scan_begin_src == TRIG_TIMER &&
-		    cmd->scan_begin_arg <
-		    cmd->convert_arg * cmd->scan_end_arg) {
-			cmd->scan_begin_arg =
-			    cmd->convert_arg * cmd->scan_end_arg;
-			err++;
+		arg = cmd->convert_arg;
+		skel_ns_to_timer(&arg, cmd->flags);
+		err |= cfc_check_trigger_arg_is(&cmd->convert_arg, arg);
+
+		if (cmd->scan_begin_src == TRIG_TIMER) {
+			arg = cmd->convert_arg * cmd->scan_end_arg;
+			err |= cfc_check_trigger_arg_min(&cmd->scan_begin_arg,
+							 arg);
 		}
 	}
 
@@ -331,61 +339,71 @@ static int skel_ao_rinsn(struct comedi_device *dev, struct comedi_subdevice *s,
 	return i;
 }
 
-/* DIO devices are slightly special.  Although it is possible to
+/*
+ * DIO devices are slightly special. Although it is possible to
  * implement the insn_read/insn_write interface, it is much more
  * useful to applications if you implement the insn_bits interface.
- * This allows packed reading/writing of the DIO channels.  The
- * comedi core can convert between insn_bits and insn_read/write */
+ * This allows packed reading/writing of the DIO channels. The
+ * comedi core can convert between insn_bits and insn_read/write.
+ */
 static int skel_dio_insn_bits(struct comedi_device *dev,
 			      struct comedi_subdevice *s,
-			      struct comedi_insn *insn, unsigned int *data)
+			      struct comedi_insn *insn,
+			      unsigned int *data)
 {
-	/* The insn data is a mask in data[0] and the new data
-	 * in data[1], each channel cooresponding to a bit. */
-	if (data[0]) {
-		s->state &= ~data[0];
-		s->state |= data[0] & data[1];
+	/*
+	 * The insn data is a mask in data[0] and the new data
+	 * in data[1], each channel cooresponding to a bit.
+	 *
+	 * The core provided comedi_dio_update_state() function can
+	 * be used to handle the internal state update to DIO subdevices
+	 * with <= 32 channels. This function will return '0' if the
+	 * state does not change or the mask of the channels that need
+	 * to be updated.
+	 */
+	if (comedi_dio_update_state(s, data)) {
 		/* Write out the new digital output lines */
-		/* outw(s->state,dev->iobase + SKEL_DIO); */
+		/* outw(s->state, dev->iobase + SKEL_DIO); */
 	}
 
-	/* on return, data[1] contains the value of the digital
-	 * input and output lines. */
-	/* data[1]=inw(dev->iobase + SKEL_DIO); */
-	/* or we could just return the software copy of the output values if
-	 * it was a purely digital output subdevice */
-	/* data[1]=s->state; */
+	/*
+	 * On return, data[1] contains the value of the digital
+	 * input and output lines.
+	 */
+	/* data[1] = inw(dev->iobase + SKEL_DIO); */
+
+	/*
+	 * Or we could just return the software copy of the output
+	 * values if it was a purely digital output subdevice.
+	 */
+	/* data[1] = s->state; */
 
 	return insn->n;
 }
 
 static int skel_dio_insn_config(struct comedi_device *dev,
 				struct comedi_subdevice *s,
-				struct comedi_insn *insn, unsigned int *data)
+				struct comedi_insn *insn,
+				unsigned int *data)
 {
-	int chan = CR_CHAN(insn->chanspec);
+	int ret;
 
-	/* The input or output configuration of each digital line is
-	 * configured by a special insn_config instruction.  chanspec
-	 * contains the channel to be changed, and data[0] contains the
-	 * value COMEDI_INPUT or COMEDI_OUTPUT. */
-	switch (data[0]) {
-	case INSN_CONFIG_DIO_OUTPUT:
-		s->io_bits |= 1 << chan;
-		break;
-	case INSN_CONFIG_DIO_INPUT:
-		s->io_bits &= ~(1 << chan);
-		break;
-	case INSN_CONFIG_DIO_QUERY:
-		data[1] =
-		    (s->io_bits & (1 << chan)) ? COMEDI_OUTPUT : COMEDI_INPUT;
-		return insn->n;
-		break;
-	default:
-		return -EINVAL;
-		break;
-	}
-	/* outw(s->io_bits,dev->iobase + SKEL_DIO_CONFIG); */
+	/*
+	 * The input or output configuration of each digital line is
+	 * configured by special insn_config instructions.
+	 *
+	 * chanspec contains the channel to be changed
+	 * data[0] contains the instruction to perform on the channel
+	 *
+	 * Normally the core provided comedi_dio_insn_config() function
+	 * can be used to handle the boilerplpate.
+	 */
+	ret = comedi_dio_insn_config(dev, s, insn, data, 0);
+	if (ret)
+		return ret;
+
+	/* Update the hardware to the new configuration */
+	/* outw(s->io_bits, dev->iobase + SKEL_DIO_CONFIG); */
 
 	return insn->n;
 }
@@ -445,8 +463,6 @@ static int skel_common_attach(struct comedi_device *dev)
 		s->type = COMEDI_SUBD_UNUSED;
 	}
 
-	dev_info(dev->class_dev, "skel: attached\n");
-
 	return 0;
 }
 
@@ -484,10 +500,9 @@ static int skel_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	/* dev->board_name = thisboard->name; */
 
 	/* Allocate the private data */
-	devpriv = kzalloc(sizeof(*devpriv), GFP_KERNEL);
+	devpriv = comedi_alloc_devpriv(dev, sizeof(*devpriv));
 	if (!devpriv)
 		return -ENOMEM;
-	dev->private = devpriv;
 
 /*
  * Supported boards are usually either auto-attached via the
@@ -558,10 +573,9 @@ static int skel_auto_attach(struct comedi_device *dev,
 	dev->board_name = thisboard->name;
 
 	/* Allocate the private data */
-	devpriv = kzalloc(sizeof(*devpriv), GFP_KERNEL);
+	devpriv = comedi_alloc_devpriv(dev, sizeof(*devpriv));
 	if (!devpriv)
 		return -ENOMEM;
-	dev->private = devpriv;
 
 	/* Enable the PCI device. */
 	ret = comedi_pci_enable(dev);
@@ -689,7 +703,7 @@ static int skel_pci_probe(struct pci_dev *dev,
  * This is used by modprobe to translate PCI IDs to drivers.
  * Should only be used for PCI and ISA-PnP devices
  */
-static DEFINE_PCI_DEVICE_TABLE(skel_pci_table) = {
+static const struct pci_device_id skel_pci_table[] = {
 	{ PCI_VDEVICE(SKEL, 0x0100), BOARD_SKEL100 },
 	{ PCI_VDEVICE(SKEL, 0x0200), BOARD_SKEL200 },
 	{ 0 }

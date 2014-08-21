@@ -11,6 +11,9 @@
 #ifndef _ASM_GICREGS_H
 #define _ASM_GICREGS_H
 
+#include <linux/bitmap.h>
+#include <linux/threads.h>
+
 #undef	GICISBYTELITTLEENDIAN
 
 /* Constants */
@@ -347,7 +350,7 @@ struct gic_shared_intr_map {
 #define GIC_CPU_INT2		2 /* .		      */
 #define GIC_CPU_INT3		3 /* .		      */
 #define GIC_CPU_INT4		4 /* .		      */
-#define GIC_CPU_INT5		5 /* Core Interrupt 5 */
+#define GIC_CPU_INT5		5 /* Core Interrupt 7 */
 
 /* Local GIC interrupts. */
 #define GIC_INT_TMR		(GIC_CPU_INT5)
@@ -377,6 +380,7 @@ extern unsigned int gic_compare_int (void);
 extern cycle_t gic_read_count(void);
 extern cycle_t gic_read_compare(void);
 extern void gic_write_compare(cycle_t cnt);
+extern void gic_write_cpu_compare(cycle_t cnt, int cpu);
 extern void gic_send_ipi(unsigned int intr);
 extern unsigned int plat_ipi_call_int_xlate(unsigned int);
 extern unsigned int plat_ipi_resched_int_xlate(unsigned int);

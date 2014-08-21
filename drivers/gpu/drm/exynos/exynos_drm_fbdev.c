@@ -16,9 +16,11 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/exynos_drm.h>
 
 #include "exynos_drm_drv.h"
 #include "exynos_drm_fb.h"
+#include "exynos_drm_fbdev.h"
 #include "exynos_drm_gem.h"
 #include "exynos_drm_iommu.h"
 
@@ -88,7 +90,7 @@ static int exynos_drm_fbdev_update(struct drm_fb_helper *helper,
 	/* RGB formats use only one buffer */
 	buffer = exynos_drm_fb_buffer(fb, 0);
 	if (!buffer) {
-		DRM_LOG_KMS("buffer is null.\n");
+		DRM_DEBUG_KMS("buffer is null.\n");
 		return -EFAULT;
 	}
 
@@ -97,12 +99,13 @@ static int exynos_drm_fbdev_update(struct drm_fb_helper *helper,
 		if (is_drm_iommu_supported(dev)) {
 			unsigned int nr_pages = buffer->size >> PAGE_SHIFT;
 
-			buffer->kvaddr = vmap(buffer->pages, nr_pages, VM_MAP,
+			buffer->kvaddr = (void __iomem *) vmap(buffer->pages,
+					nr_pages, VM_MAP,
 					pgprot_writecombine(PAGE_KERNEL));
 		} else {
 			phys_addr_t dma_addr = buffer->dma_addr;
 			if (dma_addr)
-				buffer->kvaddr = phys_to_virt(dma_addr);
+				buffer->kvaddr = (void __iomem *)phys_to_virt(dma_addr);
 			else
 				buffer->kvaddr = (void __iomem *)NULL;
 		}
@@ -118,16 +121,8 @@ static int exynos_drm_fbdev_update(struct drm_fb_helper *helper,
 	offset = fbi->var.xoffset * (fb->bits_per_pixel >> 3);
 	offset += fbi->var.yoffset * fb->pitches[0];
 
-	dev->mode_config.fb_base = (resource_size_t)buffer->dma_addr;
 	fbi->screen_base = buffer->kvaddr + offset;
-	if (is_drm_iommu_supported(dev))
-		fbi->fix.smem_start = (unsigned long)
-			(page_to_phys(sg_page(buffer->sgt->sgl)) + offset);
-	else
-		fbi->fix.smem_start = (unsigned long)buffer->dma_addr;
-
 	fbi->screen_size = size;
-	fbi->fix.smem_len = size;
 
 	return 0;
 }
@@ -165,8 +160,18 @@ static int exynos_drm_fbdev_create(struct drm_fb_helper *helper,
 
 	size = mode_cmd.pitches[0] * mode_cmd.height;
 
-	/* 0 means to allocate physically continuous memory */
-	exynos_gem_obj = exynos_drm_gem_create(dev, 0, size);
+	exynos_gem_obj = exynos_drm_gem_create(dev, EXYNOS_BO_CONTIG, size);
+	/*
+	 * If physically contiguous memory allocation fails and if IOMMU is
+	 * supported then try to get buffer from non physically contiguous
+	 * memory area.
+	 */
+	if (IS_ERR(exynos_gem_obj) && is_drm_iommu_supported(dev)) {
+		dev_warn(&pdev->dev, "contiguous FB allocation failed, falling back to non-contiguous\n");
+		exynos_gem_obj = exynos_drm_gem_create(dev, EXYNOS_BO_NONCONTIG,
+							size);
+	}
+
 	if (IS_ERR(exynos_gem_obj)) {
 		ret = PTR_ERR(exynos_gem_obj);
 		goto err_release_framebuffer;
@@ -224,6 +229,24 @@ static struct drm_fb_helper_funcs exynos_drm_fb_helper_funcs = {
 	.fb_probe =	exynos_drm_fbdev_create,
 };
 
+static bool exynos_drm_fbdev_is_anything_connected(struct drm_device *dev)
+{
+	struct drm_connector *connector;
+	bool ret = false;
+
+	mutex_lock(&dev->mode_config.mutex);
+	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
+		if (connector->status != connector_status_connected)
+			continue;
+
+		ret = true;
+		break;
+	}
+	mutex_unlock(&dev->mode_config.mutex);
+
+	return ret;
+}
+
 int exynos_drm_fbdev_init(struct drm_device *dev)
 {
 	struct exynos_drm_fbdev *fbdev;
@@ -235,11 +258,12 @@ int exynos_drm_fbdev_init(struct drm_device *dev)
 	if (!dev->mode_config.num_crtc || !dev->mode_config.num_connector)
 		return 0;
 
+	if (!exynos_drm_fbdev_is_anything_connected(dev))
+		return 0;
+
 	fbdev = kzalloc(sizeof(*fbdev), GFP_KERNEL);
-	if (!fbdev) {
-		DRM_ERROR("failed to allocate drm fbdev.\n");
+	if (!fbdev)
 		return -ENOMEM;
-	}
 
 	private->fb_helper = helper = &fbdev->drm_fb_helper;
 	helper->funcs = &exynos_drm_fb_helper_funcs;
@@ -343,7 +367,5 @@ void exynos_drm_fbdev_restore_mode(struct drm_device *dev)
 	if (!private || !private->fb_helper)
 		return;
 
-	drm_modeset_lock_all(dev);
-	drm_fb_helper_restore_fbdev_mode(private->fb_helper);
-	drm_modeset_unlock_all(dev);
+	drm_fb_helper_restore_fbdev_mode_unlocked(private->fb_helper);
 }

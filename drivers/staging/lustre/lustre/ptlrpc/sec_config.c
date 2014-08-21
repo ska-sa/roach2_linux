@@ -36,20 +36,20 @@
 
 #define DEBUG_SUBSYSTEM S_SEC
 
-#include <linux/libcfs/libcfs.h>
+#include "../../include/linux/libcfs/libcfs.h"
 #include <linux/crypto.h>
 #include <linux/key.h>
 
-#include <obd.h>
-#include <obd_class.h>
-#include <obd_support.h>
-#include <lustre_net.h>
-#include <lustre_import.h>
-#include <lustre_log.h>
-#include <lustre_disk.h>
-#include <lustre_dlm.h>
-#include <lustre_param.h>
-#include <lustre_sec.h>
+#include "../include/obd.h"
+#include "../include/obd_class.h"
+#include "../include/obd_support.h"
+#include "../include/lustre_net.h"
+#include "../include/lustre_import.h"
+#include "../include/lustre_log.h"
+#include "../include/lustre_disk.h"
+#include "../include/lustre_dlm.h"
+#include "../include/lustre_param.h"
+#include "../include/lustre_sec.h"
 
 #include "ptlrpc_internal.h"
 
@@ -195,7 +195,7 @@ int sptlrpc_parse_rule(char *param, struct sptlrpc_rule *rule)
 	flavor = strchr(param, '=');
 	if (flavor == NULL) {
 		CERROR("invalid param, no '='\n");
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 	*flavor++ = '\0';
 
@@ -208,7 +208,7 @@ int sptlrpc_parse_rule(char *param, struct sptlrpc_rule *rule)
 		rule->sr_netid = libcfs_str2net(param);
 		if (rule->sr_netid == LNET_NIDNET(LNET_NID_ANY)) {
 			CERROR("invalid network name: %s\n", param);
-			RETURN(-EINVAL);
+			return -EINVAL;
 		}
 	}
 
@@ -228,16 +228,16 @@ int sptlrpc_parse_rule(char *param, struct sptlrpc_rule *rule)
 			rule->sr_to = LUSTRE_SP_MDT;
 		} else {
 			CERROR("invalid rule dir segment: %s\n", dir);
-			RETURN(-EINVAL);
+			return -EINVAL;
 		}
 	}
 
 	/* 2.1 flavor */
 	rc = sptlrpc_parse_flavor(flavor, &rule->sr_flvr);
 	if (rc)
-		RETURN(-EINVAL);
+		return -EINVAL;
 
-	RETURN(0);
+	return 0;
 }
 EXPORT_SYMBOL(sptlrpc_parse_rule);
 
@@ -255,7 +255,7 @@ void sptlrpc_rule_set_free(struct sptlrpc_rule_set *rset)
 EXPORT_SYMBOL(sptlrpc_rule_set_free);
 
 /*
- * return 0 if the rule set could accomodate one more rule.
+ * return 0 if the rule set could accommodate one more rule.
  */
 int sptlrpc_rule_set_expand(struct sptlrpc_rule_set *rset)
 {
@@ -661,18 +661,17 @@ static int __sptlrpc_process_config(struct lustre_cfg *lcfg,
 	char		    fsname[MTI_NAME_MAXLEN];
 	struct sptlrpc_rule     rule;
 	int		     rc;
-	ENTRY;
 
 	target = lustre_cfg_string(lcfg, 1);
 	if (target == NULL) {
 		CERROR("missing target name\n");
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 
 	param = lustre_cfg_string(lcfg, 2);
 	if (param == NULL) {
 		CERROR("missing parameter\n");
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 
 	CDEBUG(D_SEC, "processing rule: %s.%s\n", target, param);
@@ -680,13 +679,13 @@ static int __sptlrpc_process_config(struct lustre_cfg *lcfg,
 	/* parse rule to make sure the format is correct */
 	if (strncmp(param, PARAM_SRPC_FLVR, sizeof(PARAM_SRPC_FLVR) - 1) != 0) {
 		CERROR("Invalid sptlrpc parameter: %s\n", param);
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 	param += sizeof(PARAM_SRPC_FLVR) - 1;
 
 	rc = sptlrpc_parse_rule(param, &rule);
 	if (rc)
-		RETURN(-EINVAL);
+		return -EINVAL;
 
 	if (conf == NULL) {
 		target2fsname(target, fsname, sizeof(fsname));
@@ -708,7 +707,7 @@ static int __sptlrpc_process_config(struct lustre_cfg *lcfg,
 	if (rc == 0)
 		conf->sc_modified++;
 
-	RETURN(rc);
+	return rc;
 }
 
 int sptlrpc_process_config(struct lustre_cfg *lcfg)
@@ -746,11 +745,13 @@ void sptlrpc_conf_log_update_begin(const char *logname)
 	mutex_lock(&sptlrpc_conf_lock);
 
 	conf = sptlrpc_conf_get(fsname, 0);
-	if (conf && conf->sc_local) {
-		LASSERT(conf->sc_updated == 0);
-		sptlrpc_conf_free_rsets(conf);
+	if (conf) {
+		if(conf->sc_local) {
+			LASSERT(conf->sc_updated == 0);
+			sptlrpc_conf_free_rsets(conf);
+		}
+		conf->sc_modified = 0;
 	}
-	conf->sc_modified = 0;
 
 	mutex_unlock(&sptlrpc_conf_lock);
 }
@@ -905,7 +906,6 @@ EXPORT_SYMBOL(sptlrpc_target_choose_flavor);
 void sptlrpc_conf_client_adapt(struct obd_device *obd)
 {
 	struct obd_import  *imp;
-	ENTRY;
 
 	LASSERT(strcmp(obd->obd_type->typ_name, LUSTRE_MDC_NAME) == 0 ||
 		strcmp(obd->obd_type->typ_name, LUSTRE_OSC_NAME) ==0);
@@ -918,13 +918,12 @@ void sptlrpc_conf_client_adapt(struct obd_device *obd)
 	if (imp) {
 		spin_lock(&imp->imp_lock);
 		if (imp->imp_sec)
-			imp->imp_sec_expire = cfs_time_current_sec() +
+			imp->imp_sec_expire = get_seconds() +
 				SEC_ADAPT_DELAY;
 		spin_unlock(&imp->imp_lock);
 	}
 
 	up_read(&obd->u.cli.cl_sem);
-	EXIT;
 }
 EXPORT_SYMBOL(sptlrpc_conf_client_adapt);
 
@@ -1011,11 +1010,10 @@ int sptlrpc_target_local_copy_conf(struct obd_device *obd,
 	struct lvfs_run_ctxt  saved;
 	struct dentry	*dentry;
 	int		   rc;
-	ENTRY;
 
 	ctxt = llog_get_context(obd, LLOG_CONFIG_ORIG_CTXT);
 	if (ctxt == NULL)
-		RETURN(-EINVAL);
+		return -EINVAL;
 
 	push_ctxt(&saved, &obd->obd_lvfs_ctxt, NULL);
 
@@ -1058,7 +1056,7 @@ out_ctx:
 	llog_ctxt_put(ctxt);
 	CDEBUG(D_SEC, "target %s: write local sptlrpc conf: rc = %d\n",
 	       obd->obd_name, rc);
-	RETURN(rc);
+	return rc;
 }
 
 static int local_read_handler(const struct lu_env *env,
@@ -1068,11 +1066,10 @@ static int local_read_handler(const struct lu_env *env,
 	struct sptlrpc_conf  *conf = (struct sptlrpc_conf *) data;
 	struct lustre_cfg    *lcfg = (struct lustre_cfg *)(rec + 1);
 	int		   cfg_len, rc;
-	ENTRY;
 
 	if (rec->lrh_type != OBD_CFG_REC) {
 		CERROR("unhandled lrh_type: %#x\n", rec->lrh_type);
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 
 	cfg_len = rec->lrh_len - sizeof(struct llog_rec_hdr) -
@@ -1081,15 +1078,15 @@ static int local_read_handler(const struct lu_env *env,
 	rc = lustre_cfg_sanity_check(lcfg, cfg_len);
 	if (rc) {
 		CERROR("Insane cfg\n");
-		RETURN(rc);
+		return rc;
 	}
 
 	if (lcfg->lcfg_command != LCFG_SPTLRPC_CONF) {
 		CERROR("invalid command (%x)\n", lcfg->lcfg_command);
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 
-	RETURN(__sptlrpc_process_config(lcfg, conf));
+	return __sptlrpc_process_config(lcfg, conf);
 }
 
 static
@@ -1100,14 +1097,13 @@ int sptlrpc_target_local_read_conf(struct obd_device *obd,
 	struct llog_ctxt      *ctxt;
 	struct lvfs_run_ctxt   saved;
 	int		    rc;
-	ENTRY;
 
 	LASSERT(conf->sc_updated == 0 && conf->sc_local == 0);
 
 	ctxt = llog_get_context(obd, LLOG_CONFIG_ORIG_CTXT);
 	if (ctxt == NULL) {
 		CERROR("missing llog context\n");
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 
 	push_ctxt(&saved, &obd->obd_lvfs_ctxt, NULL);
@@ -1143,7 +1139,7 @@ out_pop:
 	llog_ctxt_put(ctxt);
 	CDEBUG(D_SEC, "target %s: read local sptlrpc conf: rc = %d\n",
 	       obd->obd_name, rc);
-	RETURN(rc);
+	return rc;
 }
 
 
@@ -1160,7 +1156,6 @@ int sptlrpc_conf_target_get_rules(struct obd_device *obd,
 	enum lustre_sec_part      sp_dst;
 	char		      fsname[MTI_NAME_MAXLEN];
 	int		       rc = 0;
-	ENTRY;
 
 	if (strcmp(obd->obd_type->typ_name, LUSTRE_MDT_NAME) == 0) {
 		sp_dst = LUSTRE_SP_MDT;
@@ -1168,7 +1163,7 @@ int sptlrpc_conf_target_get_rules(struct obd_device *obd,
 		sp_dst = LUSTRE_SP_OST;
 	} else {
 		CERROR("unexpected obd type %s\n", obd->obd_type->typ_name);
-		RETURN(-EINVAL);
+		return -EINVAL;
 	}
 	CDEBUG(D_SEC, "get rules for target %s\n", obd->obd_uuid.uuid);
 
@@ -1210,7 +1205,7 @@ int sptlrpc_conf_target_get_rules(struct obd_device *obd,
 				      LUSTRE_SP_ANY, sp_dst, rset);
 out:
 	mutex_unlock(&sptlrpc_conf_lock);
-	RETURN(rc);
+	return rc;
 }
 EXPORT_SYMBOL(sptlrpc_conf_target_get_rules);
 

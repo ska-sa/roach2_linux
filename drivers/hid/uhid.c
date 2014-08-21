@@ -116,30 +116,6 @@ static void uhid_hid_close(struct hid_device *hid)
 	uhid_queue_event(uhid, UHID_CLOSE);
 }
 
-static int uhid_hid_input(struct input_dev *input, unsigned int type,
-			  unsigned int code, int value)
-{
-	struct hid_device *hid = input_get_drvdata(input);
-	struct uhid_device *uhid = hid->driver_data;
-	unsigned long flags;
-	struct uhid_event *ev;
-
-	ev = kzalloc(sizeof(*ev), GFP_ATOMIC);
-	if (!ev)
-		return -ENOMEM;
-
-	ev->type = UHID_OUTPUT_EV;
-	ev->u.output_ev.type = type;
-	ev->u.output_ev.code = code;
-	ev->u.output_ev.value = value;
-
-	spin_lock_irqsave(&uhid->qlock, flags);
-	uhid_queue(uhid, ev);
-	spin_unlock_irqrestore(&uhid->qlock, flags);
-
-	return 0;
-}
-
 static int uhid_hid_parse(struct hid_device *hid)
 {
 	struct uhid_device *uhid = hid->driver_data;
@@ -268,13 +244,35 @@ static int uhid_hid_output_raw(struct hid_device *hid, __u8 *buf, size_t count,
 	return count;
 }
 
+static int uhid_hid_output_report(struct hid_device *hid, __u8 *buf,
+				  size_t count)
+{
+	return uhid_hid_output_raw(hid, buf, count, HID_OUTPUT_REPORT);
+}
+
+static int uhid_raw_request(struct hid_device *hid, unsigned char reportnum,
+			    __u8 *buf, size_t len, unsigned char rtype,
+			    int reqtype)
+{
+	switch (reqtype) {
+	case HID_REQ_GET_REPORT:
+		return uhid_hid_get_raw(hid, reportnum, buf, len, rtype);
+	case HID_REQ_SET_REPORT:
+		/* TODO: implement proper SET_REPORT functionality */
+		return -ENOSYS;
+	default:
+		return -EIO;
+	}
+}
+
 static struct hid_ll_driver uhid_hid_driver = {
 	.start = uhid_hid_start,
 	.stop = uhid_hid_stop,
 	.open = uhid_hid_open,
 	.close = uhid_hid_close,
-	.hidinput_input_event = uhid_hid_input,
 	.parse = uhid_hid_parse,
+	.output_report = uhid_hid_output_report,
+	.raw_request = uhid_raw_request,
 };
 
 #ifdef CONFIG_COMPAT
@@ -312,7 +310,7 @@ static int uhid_event_from_user(const char __user *buffer, size_t len,
 			 */
 			struct uhid_create_req_compat *compat;
 
-			compat = kmalloc(sizeof(*compat), GFP_KERNEL);
+			compat = kzalloc(sizeof(*compat), GFP_KERNEL);
 			if (!compat)
 				return -ENOMEM;
 
@@ -402,13 +400,71 @@ static int uhid_dev_create(struct uhid_device *uhid,
 	hid->uniq[63] = 0;
 
 	hid->ll_driver = &uhid_hid_driver;
-	hid->hid_get_raw_report = uhid_hid_get_raw;
-	hid->hid_output_raw_report = uhid_hid_output_raw;
 	hid->bus = ev->u.create.bus;
 	hid->vendor = ev->u.create.vendor;
 	hid->product = ev->u.create.product;
 	hid->version = ev->u.create.version;
 	hid->country = ev->u.create.country;
+	hid->driver_data = uhid;
+	hid->dev.parent = uhid_misc.this_device;
+
+	uhid->hid = hid;
+	uhid->running = true;
+
+	ret = hid_add_device(hid);
+	if (ret) {
+		hid_err(hid, "Cannot register HID device\n");
+		goto err_hid;
+	}
+
+	return 0;
+
+err_hid:
+	hid_destroy_device(hid);
+	uhid->hid = NULL;
+	uhid->running = false;
+err_free:
+	kfree(uhid->rd_data);
+	return ret;
+}
+
+static int uhid_dev_create2(struct uhid_device *uhid,
+			    const struct uhid_event *ev)
+{
+	struct hid_device *hid;
+	int ret;
+
+	if (uhid->running)
+		return -EALREADY;
+
+	uhid->rd_size = ev->u.create2.rd_size;
+	if (uhid->rd_size <= 0 || uhid->rd_size > HID_MAX_DESCRIPTOR_SIZE)
+		return -EINVAL;
+
+	uhid->rd_data = kmemdup(ev->u.create2.rd_data, uhid->rd_size,
+				GFP_KERNEL);
+	if (!uhid->rd_data)
+		return -ENOMEM;
+
+	hid = hid_allocate_device();
+	if (IS_ERR(hid)) {
+		ret = PTR_ERR(hid);
+		goto err_free;
+	}
+
+	strncpy(hid->name, ev->u.create2.name, 127);
+	hid->name[127] = 0;
+	strncpy(hid->phys, ev->u.create2.phys, 63);
+	hid->phys[63] = 0;
+	strncpy(hid->uniq, ev->u.create2.uniq, 63);
+	hid->uniq[63] = 0;
+
+	hid->ll_driver = &uhid_hid_driver;
+	hid->bus = ev->u.create2.bus;
+	hid->vendor = ev->u.create2.vendor;
+	hid->product = ev->u.create2.product;
+	hid->version = ev->u.create2.version;
+	hid->country = ev->u.create2.country;
 	hid->driver_data = uhid;
 	hid->dev.parent = uhid_misc.this_device;
 
@@ -456,6 +512,17 @@ static int uhid_dev_input(struct uhid_device *uhid, struct uhid_event *ev)
 
 	hid_input_report(uhid->hid, HID_INPUT_REPORT, ev->u.input.data,
 			 min_t(size_t, ev->u.input.size, UHID_DATA_MAX), 0);
+
+	return 0;
+}
+
+static int uhid_dev_input2(struct uhid_device *uhid, struct uhid_event *ev)
+{
+	if (!uhid->running)
+		return -EINVAL;
+
+	hid_input_report(uhid->hid, HID_INPUT_REPORT, ev->u.input2.data,
+			 min_t(size_t, ev->u.input2.size, UHID_DATA_MAX), 0);
 
 	return 0;
 }
@@ -596,11 +663,17 @@ static ssize_t uhid_char_write(struct file *file, const char __user *buffer,
 	case UHID_CREATE:
 		ret = uhid_dev_create(uhid, &uhid->input_buf);
 		break;
+	case UHID_CREATE2:
+		ret = uhid_dev_create2(uhid, &uhid->input_buf);
+		break;
 	case UHID_DESTROY:
 		ret = uhid_dev_destroy(uhid);
 		break;
 	case UHID_INPUT:
 		ret = uhid_dev_input(uhid, &uhid->input_buf);
+		break;
+	case UHID_INPUT2:
+		ret = uhid_dev_input2(uhid, &uhid->input_buf);
 		break;
 	case UHID_FEATURE_ANSWER:
 		ret = uhid_dev_feature_answer(uhid, &uhid->input_buf);
@@ -640,7 +713,7 @@ static const struct file_operations uhid_fops = {
 
 static struct miscdevice uhid_misc = {
 	.fops		= &uhid_fops,
-	.minor		= MISC_DYNAMIC_MINOR,
+	.minor		= UHID_MINOR,
 	.name		= UHID_NAME,
 };
 
@@ -659,3 +732,5 @@ module_exit(uhid_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("David Herrmann <dh.herrmann@gmail.com>");
 MODULE_DESCRIPTION("User-space I/O driver support for HID subsystem");
+MODULE_ALIAS_MISCDEV(UHID_MINOR);
+MODULE_ALIAS("devname:" UHID_NAME);

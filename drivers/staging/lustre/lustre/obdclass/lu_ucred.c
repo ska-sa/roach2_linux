@@ -33,21 +33,21 @@
  * This file is part of Lustre, http://www.lustre.org/
  * Lustre is a trademark of Sun Microsystems, Inc.
  *
- * lustre/obdclass/lu_object.c
+ * lustre/obdclass/lu_ucred.c
  *
- * Lustre Object.
- * These are the only exported functions, they provide some generic
- * infrastructure for managing object devices
+ * Lustre user credentials context infrastructure.
  *
  *   Author: Nikita Danilov <nikita.danilov@sun.com>
+ *   Author: Fan Yong <fan.yong@intel.com>
+ *   Author: Vitaly Fertman <vitaly_fertman@xyratex.com>
  */
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include <linux/libcfs/libcfs.h>
-#include <obd_support.h>
-#include <lu_object.h>
-#include <md_object.h>
+#include "../../include/linux/libcfs/libcfs.h"
+#include "../include/obd_support.h"
+#include "../include/lu_object.h"
+#include "../include/md_object.h"
 
 /* context key constructor/destructor: lu_ucred_key_init, lu_ucred_key_fini */
 LU_KEY_INIT_FINI(lu_ucred, struct lu_ucred);

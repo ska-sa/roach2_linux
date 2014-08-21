@@ -191,7 +191,6 @@ int cirrus_device_init(struct cirrus_device *cdev,
 		      struct pci_dev *pdev,
 		      uint32_t flags);
 void cirrus_device_fini(struct cirrus_device *cdev);
-int cirrus_gem_init_object(struct drm_gem_object *obj);
 void cirrus_gem_free_object(struct drm_gem_object *obj);
 int cirrus_dumb_mmap_offset(struct drm_file *file,
 			    struct drm_device *dev,
@@ -203,9 +202,6 @@ int cirrus_gem_create(struct drm_device *dev,
 int cirrus_dumb_create(struct drm_file *file,
 		    struct drm_device *dev,
 		       struct drm_mode_create_dumb *args);
-int cirrus_dumb_destroy(struct drm_file *file,
-		     struct drm_device *dev,
-			uint32_t handle);
 
 int cirrus_framebuffer_init(struct drm_device *dev,
 			   struct cirrus_framebuffer *gfb,
@@ -226,7 +222,7 @@ void cirrus_fbdev_fini(struct cirrus_device *cdev);
 void cirrus_driver_irq_preinstall(struct drm_device *dev);
 int cirrus_driver_irq_postinstall(struct drm_device *dev);
 void cirrus_driver_irq_uninstall(struct drm_device *dev);
-irqreturn_t cirrus_driver_irq_handler(DRM_IRQ_ARGS);
+irqreturn_t cirrus_driver_irq_handler(int irq, void *arg);
 
 				/* cirrus_kms.c */
 int cirrus_driver_load(struct drm_device *dev, unsigned long flags);
