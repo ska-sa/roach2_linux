@@ -141,7 +141,7 @@ static int r2case_probe(struct platform_device *ofdev)
                 return -ENOMEM;
         }
 
-        memset(r2case, 0, sizeof(struct input_dev *));
+        memset(r2case, 0, sizeof(struct input_dev));
 
 
         /*
